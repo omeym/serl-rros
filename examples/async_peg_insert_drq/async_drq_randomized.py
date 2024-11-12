@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append("/home/aero/anaconda3/envs/serl/lib/python3.10/site-packages")
+sys.path.append("/home/cam/miniconda3/envs/serl-rros/lib/python3.10/site-packages")
+import rclpy
+import rclpy.duration
+from rclpy.executors import MultiThreadedExecutor
 import time
 from functools import partial
 import jax
@@ -27,18 +30,26 @@ from serl_launcher.utils.launcher import (
     make_trainer_config,
     make_wandb_logger,
 )
+from kuka_server.robot_interface import RobotInterfaceNode
 from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
-from kuka_env.envs.relative_env import RelativeFrame
-from franka_env.envs.wrappers import (
+sys.path.append("/home/cam/omey_ws/serl-rros/src/")
+from serl_robot_infra.kuka_env.envs.relative_env import RelativeFrame
+from serl_robot_infra.franka_env.envs.wrappers import (
     Quat2EulerWrapper,
 )
 
-import franka_env
-import kuka_env
+import serl_robot_infra.franka_env
+import serl_robot_infra.kuka_env
+# sys.argv = sys.argv[:1]
+
+# # `app.run` calls `sys.exit`
+# try:
+#   app.run(lambda argv: None)
+# except:
+#   pass
 
 FLAGS = flags.FLAGS
-
 flags.DEFINE_string("env", "FrankaEnv-Vision-v0", "Name of environment.")
 flags.DEFINE_string("agent", "drq", "Name of agent.")
 flags.DEFINE_string("exp_name", None, "Name of the experiment for wandb logging.")
@@ -47,6 +58,7 @@ flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_bool("save_model", False, "Whether to save model.")
 flags.DEFINE_integer("critic_actor_ratio", 4, "critic to actor update ratio.")
 
+flags.DEFINE_integer("batch_size", 256, "Batch size for training the policy.")
 flags.DEFINE_integer("max_steps", 1000000, "Maximum number of training steps.")
 flags.DEFINE_integer("replay_buffer_capacity", 200000, "Replay buffer capacity.")
 
@@ -58,7 +70,7 @@ flags.DEFINE_integer("log_period", 10, "Logging period.")
 flags.DEFINE_integer("eval_period", 2000, "Evaluation period.")
 
 # flag to indicate if this is a leaner or a actor
-flags.DEFINE_boolean("learner", False, "Is this a learner or a trainer.")
+flags.DEFINE_boolean("learner", True, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("actor", False, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("render", False, "Render the environment.")
 flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
@@ -215,11 +227,12 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     The learner loop, which runs when "--learner" is set to True.
     """
     # set up wandb and logging
-    wandb_logger = make_wandb_logger(
-        project="serl_dev",
-        description=FLAGS.exp_name or FLAGS.env,
-        debug=FLAGS.debug,
-    )
+    wandb_logger = None
+    # wandb_logger = make_wandb_logger(
+    #     project="serl_dev",
+    #     description=FLAGS.exp_name or FLAGS.env,
+    #     debug=FLAGS.debug,
+    # )
 
     # To track the step in the training loop
     update_steps = 0
@@ -234,7 +247,7 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     # Create server
     server = TrainerServer(make_trainer_config(), request_callback=stats_callback)
     server.register_data_store("actor_env", replay_buffer)
-    server.start(threaded=True)
+    server.start(threaded=False)
 
     # Loop to wait until replay_buffer is filled
     pbar = tqdm.tqdm(
@@ -314,16 +327,26 @@ def learner(rng, agent: DrQAgent, replay_buffer):
 
 
 def main(_):
+    rclpy.init(args=_)
+    print("ROS2 initialized.")
+    robot_interface_node = RobotInterfaceNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(robot_interface_node)
+    robot_interface_node.get_logger().info("Robot interface node started.")
+    # executor.spin_once()
     assert FLAGS.batch_size % num_devices == 0
     # seed
     rng = jax.random.PRNGKey(FLAGS.seed)
-
+    print("Initializing environment")
     # create env and load dataset
+    print("Value of learner: ", FLAGS.learner)
     env = gym.make(
         FLAGS.env,
         fake_env=FLAGS.learner,
         save_video=FLAGS.eval_checkpoint_step,
+        robot_interface_node=robot_interface_node
     )
+    print("Environment initialized")
     # env = GripperCloseEnv(env)
     # if FLAGS.actor:
     #     env = SpacemouseIntervention(env)
@@ -332,10 +355,12 @@ def main(_):
     env = SERLObsWrapper(env)
     env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
     env = RecordEpisodeStatistics(env)
+    print("Environment wrapped")
 
     image_keys = [key for key in env.observation_space.keys() if key != "state"]
 
     rng, sampling_rng = jax.random.split(rng)
+    print("Creating agent")
     agent: DrQAgent = make_drq_agent(
         seed=FLAGS.seed,
         sample_obs=env.observation_space.sample(),
@@ -344,13 +369,16 @@ def main(_):
         encoder_type=FLAGS.encoder_type,
     )
 
+    print("Agent created")
     # replicate agent across devices
     # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
+    print("Replicating agent")
     agent: DrQAgent = jax.device_put(
         jax.tree_map(jnp.array, agent), sharding.replicate()
     )
 
     if FLAGS.learner:
+        print("Learner code executed")
         sampling_rng = jax.device_put(sampling_rng, device=sharding.replicate())
         replay_buffer = MemoryEfficientReplayBufferDataStore(
             env.observation_space,
@@ -358,6 +386,7 @@ def main(_):
             capacity=FLAGS.replay_buffer_capacity,
             image_keys=image_keys,
         )
+        print("Replay buffer initialized")
         # demo_buffer = MemoryEfficientReplayBufferDataStore(
         #     env.observation_space,
         #     env.action_space,
@@ -381,6 +410,7 @@ def main(_):
         )
 
     elif FLAGS.actor:
+        print("Initializing Actor Node")
         sampling_rng = jax.device_put(sampling_rng, sharding.replicate())
         data_store = QueuedDataStore(2000)  # the queue size on the actor
 
@@ -390,6 +420,11 @@ def main(_):
 
     else:
         raise NotImplementedError("Must be either a learner or an actor")
+    
+
+    
+
+    rclpy.shutdown()
 
 
 if __name__ == "__main__":

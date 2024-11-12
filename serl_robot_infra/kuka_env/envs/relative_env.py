@@ -2,7 +2,7 @@ from scipy.spatial.transform import Rotation as R
 import gym
 import numpy as np
 from gym import Env
-from franka_env.utils.transformations import (
+from serl_robot_infra.franka_env.utils.transformations import (
     construct_adjoint_matrix,
     construct_homogeneous_matrix,
 )

@@ -1,6 +1,6 @@
 """Gym Interface for Franka"""
 import sys
-sys.path.append("/home/aero/anaconda3/envs/serl/lib/python3.10/site-packages")
+sys.path.append("/home/cam/miniconda3/envs/serl-rros/lib/python3.10/site-packages")
 
 import numpy as np
 import gym
@@ -14,14 +14,14 @@ import threading
 from datetime import datetime
 from collections import OrderedDict
 from typing import Dict
-sys.path.append("/home/aero/omey_ws/serl-rros/src/")
+sys.path.append("/home/cam/omey_ws/serl-rros/src/")
 from serl_robot_infra.franka_env.camera.video_capture import VideoCapture
 from serl_robot_infra.franka_env.camera.rs_capture import RSCapture
 from serl_robot_infra.franka_env.utils.rotations import euler_2_quat, quat_2_euler
 
 
 # from kuka_server.kuka_server.robot_interface import RobotInterfaceNode
-from kuka_server.robot_interface import RobotInterfaceNode
+
 
 
 class ImageDisplayer(threading.Thread):
@@ -52,8 +52,8 @@ class DefaultEnvConfig:
 
     ROBOT_IP: str = "192.168.10.122"
     REALSENSE_CAMERAS: Dict = {
-        "wrist_1": "130322274175",
-        "wrist_2": "127122270572",
+        "wrist_1": "128422270311",
+        "wrist_2": "840412060409",
     }
     TARGET_POSE: np.ndarray = np.zeros((6,))
     REWARD_THRESHOLD: np.ndarray = np.zeros((6,))
@@ -83,9 +83,10 @@ class KukaEnv(gym.Env):
         save_video=False,
         config: DefaultEnvConfig = None,
         max_episode_length=100,
+        robot_interface_node=None
     ):
-        
-        self.robot_interface_node = RobotInterfaceNode()
+        print("Initializing KukaEnv")  
+        self.robot_interface_node = robot_interface_node
         self.action_scale = config.ACTION_SCALE
         self._TARGET_POSE = config.TARGET_POSE
         self._REWARD_THRESHOLD = config.REWARD_THRESHOLD
@@ -136,7 +137,8 @@ class KukaEnv(gym.Env):
             np.ones((7,), dtype=np.float32) * -1,
             np.ones((7,), dtype=np.float32),
         )
-
+        print("Initializing Observation Space")
+        time.sleep(2)
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
@@ -164,8 +166,9 @@ class KukaEnv(gym.Env):
         self.cycle_count = 0
 
         if fake_env:
+            print("returning from fake env")
             return
-
+        print("Initializing Cameras")
         self.cap = None
         self.init_cameras(config.REALSENSE_CAMERAS)
         self.img_queue = queue.Queue()
@@ -200,6 +203,7 @@ class KukaEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> tuple:
         """standard gym step function."""
+        print("In step function")
         start_time = time.time()
         action = np.clip(action, self.action_space.low, self.action_space.high)
         xyz_delta = action[:3]
@@ -358,6 +362,7 @@ class KukaEnv(gym.Env):
             self.close_cameras()
 
         self.cap = OrderedDict()
+        
         for cam_name, cam_serial in name_serial_dict.items():
             cap = VideoCapture(
                 RSCapture(name=cam_name, serial_number=cam_serial, depth=False)
@@ -413,12 +418,13 @@ class KukaEnv(gym.Env):
         Internal function to get the latest state of the robot and its gripper.
         """
         ps = self.robot_interface_node.get_current_state()
+        print("Ps: ", ps)
         self.currpos[:] = np.array(ps["pose"])
         self.currvel[:] = np.array(ps["vel"])
 
         self.currforce[:] = np.array(ps["force"])
         self.currtorque[:] = np.array(ps["torque"])
-        self.currjacobian[:] = np.reshape(np.array(ps["jacobian"]), (6, 7))
+        # self.currjacobian[:] = np.reshape(np.array(ps["jacobian"]), (6, 7))
 
         self.q[:] = np.array(ps["q"])
         self.dq[:] = np.array(ps["dq"])
@@ -438,7 +444,6 @@ class KukaEnv(gym.Env):
 
 
 if __name__ == '__main__':
-
     env = gym.make("KukaEnv")
     
     
