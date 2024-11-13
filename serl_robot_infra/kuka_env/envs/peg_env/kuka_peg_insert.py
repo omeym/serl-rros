@@ -27,7 +27,7 @@ class KukaPegInsert(KukaEnv):
         self._update_currpos()
         reset_pose = copy.deepcopy(self.currpos)
         reset_pose[2] += 0.10
-        self.interpolate_move(reset_pose, timeout=1)
+        self._send_pos_command(reset_pose)
 
         # execute the go_to_rest method from the parent class
         super().go_to_rest(joint_reset)

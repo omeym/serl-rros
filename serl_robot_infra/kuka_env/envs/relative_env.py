@@ -2,7 +2,7 @@ from scipy.spatial.transform import Rotation as R
 import gym
 import numpy as np
 from gym import Env
-from franka_env.utils.transformations import (
+from serl_robot_infra.franka_env.utils.transformations import (
     construct_adjoint_matrix,
     construct_homogeneous_matrix,
 )
@@ -40,6 +40,9 @@ class RelativeFrame(gym.Wrapper):
     def step(self, action: np.ndarray):
         # action is assumed to be (x, y, z, rx, ry, rz, gripper)
         # Transform action from end-effector frame to base frame
+        import time 
+        print("sleeping for 2 seconds in step")
+        time.sleep(2)
         transformed_action = self.transform_action(action)
 
         obs, reward, done, truncated, info = self.env.step(transformed_action)

@@ -1,27 +1,29 @@
 """Gym Interface for Franka"""
 import sys
-sys.path.append("/home/aero/anaconda3/envs/serl/lib/python3.10/site-packages")
+import time
+time.sleep(2)
+print("MAKE SURE TO CHANGE THE PATHS")
+sys.path.append("/home/cam/miniconda3/envs/serl-rros/lib/python3.10/site-packages")
 
 import numpy as np
 import gym
 import cv2
 import copy
 from scipy.spatial.transform import Rotation
-import time
 import requests
 import queue
 import threading
 from datetime import datetime
 from collections import OrderedDict
 from typing import Dict
-sys.path.append("/home/aero/omey_ws/serl-rros/src/")
+sys.path.append("/home/cam/omey_ws/serl-rros/src/")
 from serl_robot_infra.franka_env.camera.video_capture import VideoCapture
 from serl_robot_infra.franka_env.camera.rs_capture import RSCapture
 from serl_robot_infra.franka_env.utils.rotations import euler_2_quat, quat_2_euler
 
 
 # from kuka_server.kuka_server.robot_interface import RobotInterfaceNode
-from kuka_server.robot_interface import RobotInterfaceNode
+
 
 
 class ImageDisplayer(threading.Thread):
@@ -52,8 +54,8 @@ class DefaultEnvConfig:
 
     ROBOT_IP: str = "192.168.10.122"
     REALSENSE_CAMERAS: Dict = {
-        "wrist_1": "130322274175",
-        "wrist_2": "127122270572",
+        "wrist_1": "840412060409",
+        "wrist_2": "932122060300",
     }
     TARGET_POSE: np.ndarray = np.zeros((6,))
     REWARD_THRESHOLD: np.ndarray = np.zeros((6,))
@@ -83,9 +85,10 @@ class KukaEnv(gym.Env):
         save_video=False,
         config: DefaultEnvConfig = None,
         max_episode_length=100,
+        robot_interface_node=None
     ):
-        
-        self.robot_interface_node = RobotInterfaceNode()
+        print("Initializing KukaEnv")  
+        self.robot_interface_node = robot_interface_node
         self.action_scale = config.ACTION_SCALE
         self._TARGET_POSE = config.TARGET_POSE
         self._REWARD_THRESHOLD = config.REWARD_THRESHOLD
@@ -136,7 +139,7 @@ class KukaEnv(gym.Env):
             np.ones((7,), dtype=np.float32) * -1,
             np.ones((7,), dtype=np.float32),
         )
-
+        
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
@@ -164,8 +167,9 @@ class KukaEnv(gym.Env):
         self.cycle_count = 0
 
         if fake_env:
+            print("returning from fake env")
             return
-
+        print("Initializing Cameras")
         self.cap = None
         self.init_cameras(config.REALSENSE_CAMERAS)
         self.img_queue = queue.Queue()
@@ -200,6 +204,8 @@ class KukaEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> tuple:
         """standard gym step function."""
+        print("In step function")
+        time.sleep(2)
         start_time = time.time()
         action = np.clip(action, self.action_space.low, self.action_space.high)
         xyz_delta = action[:3]
@@ -237,6 +243,8 @@ class KukaEnv(gym.Env):
     def compute_reward(self, obs, gripper_action_effective = None) -> bool:
         """We are using a sparse reward function."""
         current_pose = obs["state"]["tcp_pose"]
+        print("In Reward function")
+        time.sleep(2)
         # convert from quat to euler first
         euler_angles = quat_2_euler(current_pose[3:])
         euler_angles = np.abs(euler_angles)
@@ -308,10 +316,24 @@ class KukaEnv(gym.Env):
         """
         # Change to precision mode for reset
         # requests.post(self.url + "update_param", json=self.config.PRECISION_PARAM)
-        time.sleep(0.5)
+        print("In Go to rest")
+        time.sleep(2)
 
-        reset_pose = self.resetpos.copy()
-        self.interpolate_move(reset_pose, timeout=1.5)
+        # Perform Carteasian reset
+        if self.randomreset:  # randomize reset position in xy plane
+            reset_pose = self.resetpos.copy()
+            reset_pose[:2] += np.random.uniform(
+                -self.random_xy_range, self.random_xy_range, (2,)
+            )
+            euler_random = self._TARGET_POSE[3:].copy()
+            euler_random[-1] += np.random.uniform(
+                -self.random_rz_range, self.random_rz_range
+            )
+            reset_pose[3:] = euler_2_quat(euler_random)
+            self.interpolate_move(reset_pose, timeout=1.5)
+        else:
+            reset_pose = self.resetpos.copy()
+            self.interpolate_move(reset_pose, timeout=1.5)
 
         # Change to compliance mode
         # requests.post(self.url + "update_param", json=self.config.COMPLIANCE_PARAM)
@@ -358,6 +380,7 @@ class KukaEnv(gym.Env):
             self.close_cameras()
 
         self.cap = OrderedDict()
+        
         for cam_name, cam_serial in name_serial_dict.items():
             cap = VideoCapture(
                 RSCapture(name=cam_name, serial_number=cam_serial, depth=False)
@@ -413,15 +436,16 @@ class KukaEnv(gym.Env):
         Internal function to get the latest state of the robot and its gripper.
         """
         ps = self.robot_interface_node.get_current_state()
-        self.currpos[:] = np.array(ps["pose"])
-        self.currvel[:] = np.array(ps["vel"])
+        print("Ps: ", ps)
+        self.currpos[:] = np.array(ps["pose"], dtype=np.float32)
+        self.currvel[:] = np.array(ps["vel"], dtype=np.float32)
 
-        self.currforce[:] = np.array(ps["force"])
-        self.currtorque[:] = np.array(ps["torque"])
-        self.currjacobian[:] = np.reshape(np.array(ps["jacobian"]), (6, 7))
+        self.currforce[:] = np.array(ps["force"], dtype=np.float32)
+        self.currtorque[:] = np.array(ps["torque"], dtype=np.float32)
+        self.currjacobian[:] = np.reshape(np.array(ps["jacobian"], dtype=np.float32), (6, 7))
 
-        self.q[:] = np.array(ps["q"])
-        self.dq[:] = np.array(ps["dq"])
+        self.q[:] = np.array(ps["q"], dtype=np.float32)
+        self.dq[:] = np.array(ps["dq"], dtype=np.float32)
         
         if(self.use_gripper):
             self.curr_gripper_pos = np.array(ps["gripper_pos"])
@@ -438,7 +462,6 @@ class KukaEnv(gym.Env):
 
 
 if __name__ == '__main__':
-
     env = gym.make("KukaEnv")
     
     

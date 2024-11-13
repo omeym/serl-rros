@@ -6,10 +6,11 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-
+from rcl_interfaces.msg import ParameterValue
+from rcl_interfaces.srv import GetParameters
 import numpy as np
-
 from geometry_msgs.msg import Pose, Point, Quaternion
+from std_msgs.msg import String
 import rclpy.task
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
@@ -26,11 +27,12 @@ from moveit_msgs.msg import (
 from moveit_msgs.srv import GetPositionIK, GetMotionPlan, GetPositionFK
 from moveit_msgs.action import ExecuteTrajectory
 from kuka_server.wait_for_message import wait_for_message
-
+from moveit_configs_utils.launches import generate_move_group_launch
 
 from kuka_server.utils import quat_to_euler, convert_wrench_to_numpy, euler_to_quat
 from lbr_fri_idl.msg import LBRState
 import copy
+import optas
 
 class RobotInterfaceNode(Node):
     timeout_sec_ = 5.0
@@ -46,6 +48,7 @@ class RobotInterfaceNode(Node):
     execute_action_name_ = "execute_trajectory"
     fri_execute_action_name_ = "joint_trajectory_controller/follow_joint_trajectory"
     WRENCH_TOPIC = "/lbr/force_torque_broadcaster/wrench"
+    robot_desc_topic_ = "robot_description"
 
     base_ = "link_0"  ###Changed for compatibility with latest lbr stack
     end_effector_ = "link_ee"
@@ -66,6 +69,8 @@ class RobotInterfaceNode(Node):
             self.wrench_callback,
             10
         )
+
+        self._init_jacobian()
 
         self.ik_client_ = self.create_client(GetPositionIK, self.ik_srv_name_, callback_group=self.ik_client_callback)
         if not self.ik_client_.wait_for_service(timeout_sec=self.timeout_sec_):
@@ -126,8 +131,23 @@ class RobotInterfaceNode(Node):
         self.latest_wrench = convert_wrench_to_numpy(msg)
         # self.get_logger().info(f"Received wrench data: {self.latest_wrench}")
         return
+    
+    
+    def _init_jacobian(self):
+        print("Initializing Jacobian")
 
+        self._robot_description = self._retrieve_parameter(
+            "robot_state_publisher/get_parameters", "robot_description"
+        ).string_value
+        self._robot = optas.RobotModel(
+            urdf_string=self._robot_description, time_derivs=[0, 1]
+        )
 
+        self.jacobian_func = self._robot.get_link_geometric_jacobian_function(
+            link=self.end_effector_, base_link=self.base_, numpy_output=True
+        )
+
+        return
     def get_fk(self) -> Pose | None:
         current_joint_state = self.get_joint_state()
         if current_joint_state is None:
@@ -166,7 +186,7 @@ class RobotInterfaceNode(Node):
         joint_position = lbr_state.measured_joint_position.tolist()
         if commanded:
             joint_position = lbr_state.commanded_joint_position.tolist()
-        print(joint_position)
+        
         joint_position[2], joint_position[3] = joint_position[3], joint_position[2]
 
         current_robot_state = RobotState()
@@ -203,11 +223,29 @@ class RobotInterfaceNode(Node):
         return np.sum(
             np.square(np.subtract(joint_state_1.position, joint_state_2.position))
         )
+    
+    def _retrieve_parameter(self, service: str, parameter_name: str) -> ParameterValue:
+        parameter_client = self.create_client(GetParameters, service)
+        while not parameter_client.wait_for_service(timeout_sec=1.0):
+            if not rclpy.ok():
+                self.get_logger().error(
+                    "Interrupted while waiting for the service. Exiting."
+                )
+                return None
+            self.get_logger().info(f"Waiting for '{service}' service...")
+        request = GetParameters.Request(names=[parameter_name])
+        future = parameter_client.call_async(request=request)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is None:
+            self.get_logger().error(f"Failed to retrieve '{parameter_name}'.")
+            return None
+        self.get_logger().info(f"Received '{parameter_name}' from '{service}'.")
+        return future.result().values[0]
 
     def get_current_state(self):
         ##Return a dictionary with all the corresponding state variables
         #Pose, Velocity, Force, Torque, Jacobian, Joint Angles, Joint Velocity, Gripper Pose
-        self.robot_state["pose"] = np.zeros((6,))
+        self.robot_state["pose"] = np.zeros((7,))
         self.robot_state["vel"] = np.zeros((6,))
         self.robot_state["force"] = np.zeros((3,))
         self.robot_state["torque"] = np.zeros((3,))
@@ -216,12 +254,8 @@ class RobotInterfaceNode(Node):
 
         ##TCP pose
         current_ee_geom_pose, current_joint_state = self.get_fk()
-        self.robot_state["pose"][:3] = np.array([current_ee_geom_pose.position.x,current_ee_geom_pose.position.y,current_ee_geom_pose.position.z])
-        euler_angles = quat_to_euler( np.array([current_ee_geom_pose.orientation.x,
-                                               current_ee_geom_pose.orientation.y,
-                                               current_ee_geom_pose.orientation.z,
-                                               current_ee_geom_pose.orientation.w]))
-        self.robot_state["pose"][3:] = euler_angles
+        self.robot_state["pose"] = np.array([current_ee_geom_pose.position.x,current_ee_geom_pose.position.y,current_ee_geom_pose.position.z,
+                                             current_ee_geom_pose.orientation.x,current_ee_geom_pose.orientation.y,current_ee_geom_pose.orientation.z,current_ee_geom_pose.orientation.w])
         
         ##Getting Joint Angles
         joint_angles = current_joint_state.position
@@ -233,25 +267,27 @@ class RobotInterfaceNode(Node):
         current_wrench = copy.deepcopy(self.latest_wrench)
         self.robot_state["force"] = current_wrench[:3]
         self.robot_state["torque"] = current_wrench[3:]
-
         
+        
+        self.robot_state["jacobian"] = self.jacobian_func(joint_angles)
 
+        self.robot_state["vel"] = np.dot(self.robot_state["jacobian"],joint_velocity)
 
-        return
+        return self.robot_state
 
     def move_to_pose(self, pose:np.ndarray):
-
+        print("Moving to Pose: ", pose)
         target_pose = Pose()
         
-        target_pose.position.x = pose[0]
-        target_pose.position.y = pose[1]
-        target_pose.position.z = pose[2]
+        target_pose.position.x = float(pose[0])
+        target_pose.position.y = float(pose[1])
+        target_pose.position.z = float(pose[2])
 
-        target_pose_quaternion = euler_to_quat(pose[3:])
-        target_pose.orientation.x = target_pose_quaternion[0]
-        target_pose.orientation.y = target_pose_quaternion[1]
-        target_pose.orientation.z = target_pose_quaternion[2]
-        target_pose.orientation.w = target_pose_quaternion[3]
+        # target_pose_quaternion = euler_to_quat(pose[3:])
+        target_pose.orientation.x = float(pose[3])
+        target_pose.orientation.y = float(pose[4])
+        target_pose.orientation.z = float(pose[5])
+        target_pose.orientation.w = float(pose[6])
 
 
         traj = self.get_motion_plan(target_pose, True)
@@ -428,73 +464,6 @@ def main(args=None):
     executor.add_node(robot_interface_node)
     robot_interface_node.get_logger().info("Robot interface node started.")
 
-    # target_poses = []
-    # for i in range(3):
-    #     target_poses.append(
-    #         Pose(
-    #             position=Point(x=0.5, y=-0.1 + 0.1 * i, z=0.6),
-    #             orientation=Quaternion(x=0.0, y=-1.0, z=0.0, w=0.0),
-    #         )
-    #     )
-
-    # traj = robot_interface_node.get_motion_plan(target_poses[1])
-    # if traj:
-    #     client = robot_interface_node.get_motion_execute_client()
-    #     goal = ExecuteTrajectory.Goal()
-    #     goal.trajectory = traj
-
-    #     future = client.send_goal_async(goal)
-    #     rclpy.spin_until_future_complete(robot_interface_node, future)
-        
-    #     goal_handle = future.result()
-    #     if not goal_handle.accepted:
-    #         robot_interface_node.get_logger().error("Failed to execute trajectory")
-    #     else:
-    #         robot_interface_node.get_logger().info("Trajectory accepted")
-
-    #     result_future = goal_handle.get_result_async()
-
-    #     expect_duration = traj.joint_trajectory.points[-1].time_from_start
-    #     expect_time = time.time() + 2 * expect_duration.sec 
-    #     while not result_future.done() and time.time() < expect_time:
-    #         time.sleep(0.01)
-
-    #     robot_interface_node.get_logger().info("Trajectory executed")
-
-    #     robot_interface_node.get_logger().info("Current pose: " + str(robot_interface_node.get_fk()[0])) 
-
-    # for target_pose in target_poses:
-    #     traj = robot_interface_node.get_motion_plan(target_pose, True)
-    #     if traj:
-    #         client = robot_interface_node.get_motion_execute_client()
-    #         goal = ExecuteTrajectory.Goal()
-    #         goal.trajectory = traj
-
-    #         future = client.send_goal_async(goal)
-    #         rclpy.spin_until_future_complete(robot_interface_node, future)
-            
-    #         goal_handle = future.result()
-    #         if not goal_handle.accepted:
-    #             robot_interface_node.get_logger().error("Failed to execute trajectory")
-    #         else:
-    #             robot_interface_node.get_logger().info("Trajectory accepted")
-
-            
-    #         result_future = goal_handle.get_result_async()
-
-    #         expect_duration = traj.joint_trajectory.points[-1].time_from_start
-    #         expect_time = time.time() + 2 * expect_duration.sec
-    #         while not result_future.done() and time.time() < expect_time:
-    #             time.sleep(0.01)
-
-    #         robot_interface_node.get_logger().info("Trajectory executed")
-        
-    #         robot_interface_node.get_logger().info("Current pose: "  + str(robot_interface_node.get_fk()[0]) )
-
-    # rclpy.spin(robot_interface_node)
-    robot_interface_node.get_current_state()
-    
-    print("Current State: ", robot_interface_node.robot_state)
     executor.spin()
 
     rclpy.shutdown()
