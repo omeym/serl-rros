@@ -3,7 +3,7 @@ import numpy as np
 
 register(
     id="KukaEnv-Vision-v0",
-    entry_point="kuka_env.envs:FrankaEnv",
+    entry_point="kuka_env.envs:KukaEnv",
     max_episode_steps=100,
 )
 

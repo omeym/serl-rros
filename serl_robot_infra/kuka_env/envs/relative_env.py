@@ -40,6 +40,9 @@ class RelativeFrame(gym.Wrapper):
     def step(self, action: np.ndarray):
         # action is assumed to be (x, y, z, rx, ry, rz, gripper)
         # Transform action from end-effector frame to base frame
+        import time 
+        print("sleeping for 2 seconds in step")
+        time.sleep(2)
         transformed_action = self.transform_action(action)
 
         obs, reward, done, truncated, info = self.env.step(transformed_action)

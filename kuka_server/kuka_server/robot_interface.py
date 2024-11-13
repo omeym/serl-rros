@@ -279,15 +279,15 @@ class RobotInterfaceNode(Node):
         print("Moving to Pose: ", pose)
         target_pose = Pose()
         
-        target_pose.position.x = pose[0]
-        target_pose.position.y = pose[1]
-        target_pose.position.z = pose[2]
+        target_pose.position.x = float(pose[0])
+        target_pose.position.y = float(pose[1])
+        target_pose.position.z = float(pose[2])
 
         # target_pose_quaternion = euler_to_quat(pose[3:])
-        target_pose.orientation.x = pose[0]
-        target_pose.orientation.y = pose[1]
-        target_pose.orientation.z = pose[2]
-        target_pose.orientation.w = pose[3]
+        target_pose.orientation.x = float(pose[3])
+        target_pose.orientation.y = float(pose[4])
+        target_pose.orientation.z = float(pose[5])
+        target_pose.orientation.w = float(pose[6])
 
 
         traj = self.get_motion_plan(target_pose, True)
@@ -464,73 +464,6 @@ def main(args=None):
     executor.add_node(robot_interface_node)
     robot_interface_node.get_logger().info("Robot interface node started.")
 
-    # target_poses = []
-    # for i in range(3):
-    #     target_poses.append(
-    #         Pose(
-    #             position=Point(x=0.5, y=-0.1 + 0.1 * i, z=0.6),
-    #             orientation=Quaternion(x=0.0, y=-1.0, z=0.0, w=0.0),
-    #         )
-    #     )
-
-    # traj = robot_interface_node.get_motion_plan(target_poses[1])
-    # if traj:
-    #     client = robot_interface_node.get_motion_execute_client()
-    #     goal = ExecuteTrajectory.Goal()
-    #     goal.trajectory = traj
-
-    #     future = client.send_goal_async(goal)
-    #     rclpy.spin_until_future_complete(robot_interface_node, future)
-        
-    #     goal_handle = future.result()
-    #     if not goal_handle.accepted:
-    #         robot_interface_node.get_logger().error("Failed to execute trajectory")
-    #     else:
-    #         robot_interface_node.get_logger().info("Trajectory accepted")
-
-    #     result_future = goal_handle.get_result_async()
-
-    #     expect_duration = traj.joint_trajectory.points[-1].time_from_start
-    #     expect_time = time.time() + 2 * expect_duration.sec 
-    #     while not result_future.done() and time.time() < expect_time:
-    #         time.sleep(0.01)
-
-    #     robot_interface_node.get_logger().info("Trajectory executed")
-
-    #     robot_interface_node.get_logger().info("Current pose: " + str(robot_interface_node.get_fk()[0])) 
-
-    # for target_pose in target_poses:
-    #     traj = robot_interface_node.get_motion_plan(target_pose, True)
-    #     if traj:
-    #         client = robot_interface_node.get_motion_execute_client()
-    #         goal = ExecuteTrajectory.Goal()
-    #         goal.trajectory = traj
-
-    #         future = client.send_goal_async(goal)
-    #         rclpy.spin_until_future_complete(robot_interface_node, future)
-            
-    #         goal_handle = future.result()
-    #         if not goal_handle.accepted:
-    #             robot_interface_node.get_logger().error("Failed to execute trajectory")
-    #         else:
-    #             robot_interface_node.get_logger().info("Trajectory accepted")
-
-            
-    #         result_future = goal_handle.get_result_async()
-
-    #         expect_duration = traj.joint_trajectory.points[-1].time_from_start
-    #         expect_time = time.time() + 2 * expect_duration.sec
-    #         while not result_future.done() and time.time() < expect_time:
-    #             time.sleep(0.01)
-
-    #         robot_interface_node.get_logger().info("Trajectory executed")
-        
-    #         robot_interface_node.get_logger().info("Current pose: "  + str(robot_interface_node.get_fk()[0]) )
-
-    # rclpy.spin(robot_interface_node)
-    robot_interface_node.get_current_state()
-    
-    print("Current State: ", robot_interface_node.robot_state)
     executor.spin()
 
     rclpy.shutdown()

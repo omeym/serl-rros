@@ -33,7 +33,10 @@ from serl_launcher.utils.launcher import (
 from kuka_server.robot_interface import RobotInterfaceNode
 from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
-sys.path.append("/home/cam/omey_ws/serl-rros/src/")
+
+import os
+MAIN_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.append(MAIN_DIR)
 from serl_robot_infra.kuka_env.envs.relative_env import RelativeFrame
 from serl_robot_infra.franka_env.envs.wrappers import (
     Quat2EulerWrapper,
@@ -106,6 +109,7 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
     This is the actor loop, which runs when "--actor" is set to True.
     """
     if FLAGS.eval_checkpoint_step:
+        print("Evaluating the policy")
         success_counter = 0
         time_list = []
 
@@ -163,10 +167,11 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
     done = False
 
     # training loop
+    print("Entering Training Loop")
     timer = Timer()
     running_return = 0.0
 
-    for step in tqdm.tqdm(range(FLAGS.max_steps), dynamic_ncols=True):
+    for step in tqdm.tqdm(range(FLAGS.max_steps), dynamic_ncols=True, desc="actor"):
         timer.tick("total")
 
         with timer.context("sample_actions"):
@@ -247,7 +252,7 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     # Create server
     server = TrainerServer(make_trainer_config(), request_callback=stats_callback)
     server.register_data_store("actor_env", replay_buffer)
-    server.start(threaded=False)
+    server.start(threaded=True)
 
     # Loop to wait until replay_buffer is filled
     pbar = tqdm.tqdm(
@@ -270,7 +275,7 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     # 50/50 sampling from RLPD, half from demo and half from online experience
     replay_iterator = replay_buffer.get_iterator(
         sample_args={
-            "batch_size": FLAGS.batch_size // 2,
+            "batch_size": FLAGS.batch_size,
             "pack_obs_and_next_obs": True,
         },
         device=sharding.replicate(),
