@@ -184,3 +184,8 @@ wandb/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+realsense-ros/
+.vscode/
+data_collector/data_collector/processed_data/
+data_collector/data_collector/11_dec_logs/

@@ -12,16 +12,16 @@ class PegEnvConfig(DefaultEnvConfig):
     }
     TARGET_POSE = np.array(
         [
-            0.5906439143742067,
-            0.07771711953459341,
-            0.337835826958042,
-            3.1099675,
-            0.0146619,
-            -0.0078615,
+            0.69243,
+            -0.01238,
+            0.2242,
+            np.deg2rad(179.03),
+            np.deg2rad(1.41),
+            np.deg2rad(176.33),
         ]
     )
     RESET_POSE = TARGET_POSE + np.array([0.0, 0.0, 0.2, 0.0, 0.0, 0.0])
-    REWARD_THRESHOLD: np.ndarray = np.array([0.01, 0.01, 0.01, 0.2, 0.2, 0.2])
+    REWARD_THRESHOLD: np.ndarray = np.array([0.002, 0.002, 0.006, np.deg2rad(2), np.deg2rad(2), np.deg2rad(2)])
     APPLY_GRIPPER_PENALTY = False
     ACTION_SCALE = np.array([0.02, 0.1, 1])
     RANDOM_RESET = False
@@ -42,7 +42,7 @@ class PegEnvConfig(DefaultEnvConfig):
         [
             TARGET_POSE[0] + RANDOM_XY_RANGE,
             TARGET_POSE[1] + RANDOM_XY_RANGE,
-            TARGET_POSE[2] + 0.1,
+            TARGET_POSE[2] + 0.05,
             TARGET_POSE[3] + 0.01,
             TARGET_POSE[4] + 0.01,
             TARGET_POSE[5] + RANDOM_RZ_RANGE,

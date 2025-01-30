@@ -1,9 +1,12 @@
 """Gym Interface for Franka"""
 import sys
 import time
-time.sleep(2)
-print("MAKE SURE TO CHANGE THE PATHS")
-sys.path.append("/home/cam/miniconda3/envs/serl-rros/lib/python3.10/site-packages")
+import getpass
+username = getpass.getuser()
+env = "serl"
+print("Ensure to change anaconda3 or miniconda3 and change your environment name")
+print("Conda Environment name is: ", env)
+sys.path.append("/home/"+username+"/anaconda3/envs/"+env+"/lib/python3.10/site-packages")
 
 import numpy as np
 import gym
@@ -205,7 +208,7 @@ class KukaEnv(gym.Env):
     def step(self, action: np.ndarray) -> tuple:
         """standard gym step function."""
         print("In step function")
-        time.sleep(2)
+        
         start_time = time.time()
         action = np.clip(action, self.action_space.low, self.action_space.high)
         xyz_delta = action[:3]
@@ -243,14 +246,14 @@ class KukaEnv(gym.Env):
     def compute_reward(self, obs, gripper_action_effective = None) -> bool:
         """We are using a sparse reward function."""
         current_pose = obs["state"]["tcp_pose"]
-        print("In Reward function")
-        time.sleep(2)
+        
         # convert from quat to euler first
         euler_angles = quat_2_euler(current_pose[3:])
         euler_angles = np.abs(euler_angles)
         current_pose = np.hstack([current_pose[:3], euler_angles])
         delta = np.abs(current_pose - self._TARGET_POSE)
         if np.all(delta < self._REWARD_THRESHOLD):
+            print("Received reward 1!!!!")
             reward = 1
         else:
             # print(f'Goal not reached, the difference is {delta}, the desired threshold is {_REWARD_THRESHOLD}')
@@ -264,9 +267,9 @@ class KukaEnv(gym.Env):
     def crop_image(self, name, image) -> np.ndarray:
         """Crop realsense images to be a square."""
         if name == "wrist_1":
-            return image[:, 80:560, :]
+            return image[:, 80:650, :]
         elif name == "wrist_2":
-            return image[:, 80:560, :]
+            return image[:, 80:650, :]
         else:
             return ValueError(f"Camera {name} not recognized in cropping")
 
@@ -316,9 +319,7 @@ class KukaEnv(gym.Env):
         """
         # Change to precision mode for reset
         # requests.post(self.url + "update_param", json=self.config.PRECISION_PARAM)
-        print("In Go to rest")
-        time.sleep(2)
-
+        
         # Perform Carteasian reset
         if self.randomreset:  # randomize reset position in xy plane
             reset_pose = self.resetpos.copy()
@@ -330,10 +331,10 @@ class KukaEnv(gym.Env):
                 -self.random_rz_range, self.random_rz_range
             )
             reset_pose[3:] = euler_2_quat(euler_random)
-            self.interpolate_move(reset_pose, timeout=1.5)
+            self._send_pos_command(reset_pose)
         else:
             reset_pose = self.resetpos.copy()
-            self.interpolate_move(reset_pose, timeout=1.5)
+            self._send_pos_command(reset_pose)
 
         # Change to compliance mode
         # requests.post(self.url + "update_param", json=self.config.COMPLIANCE_PARAM)
@@ -350,7 +351,6 @@ class KukaEnv(gym.Env):
             joint_reset = True
 
         self.go_to_rest(joint_reset=joint_reset)
-        self._recover()
         self.curr_path_length = 0
 
         self._update_currpos()
@@ -402,9 +402,8 @@ class KukaEnv(gym.Env):
 
     def _send_pos_command(self, pos: np.ndarray):
         """Internal function to send position command to the robot."""
-        self._recover()
         arr = np.array(pos).astype(np.float32)
-        self.robot_interface_node.move_to_pose(arr)
+        self.robot_interface_node.move_to_pose(arr, self.resetpos)
         print("Done moving the robot")
         
     def _send_gripper_command(self, pos: float, mode="binary"):
@@ -436,7 +435,6 @@ class KukaEnv(gym.Env):
         Internal function to get the latest state of the robot and its gripper.
         """
         ps = self.robot_interface_node.get_current_state()
-        print("Ps: ", ps)
         self.currpos[:] = np.array(ps["pose"], dtype=np.float32)
         self.currvel[:] = np.array(ps["vel"], dtype=np.float32)
 

@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append("/home/cam/miniconda3/envs/serl-rros/lib/python3.10/site-packages")
+import os
+import getpass
+username = getpass.getuser()
+env = "serl"
+print("Ensure to change anaconda3 or miniconda3 and change your environment name")
+print("Conda Environment name is: ", env)
+sys.path.append("/home/"+username+"/anaconda3/envs/"+env+"/lib/python3.10/site-packages")
 import rclpy
 import rclpy.duration
 from rclpy.executors import MultiThreadedExecutor
@@ -53,13 +59,15 @@ import serl_robot_infra.kuka_env
 #   pass
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("env", "FrankaEnv-Vision-v0", "Name of environment.")
+flags.DEFINE_string("env", "KukaPegInsert-Vision-v0", "Name of environment.")
 flags.DEFINE_string("agent", "drq", "Name of agent.")
 flags.DEFINE_string("exp_name", None, "Name of the experiment for wandb logging.")
 flags.DEFINE_integer("max_traj_length", 100, "Maximum length of trajectory.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_bool("save_model", False, "Whether to save model.")
 flags.DEFINE_integer("critic_actor_ratio", 4, "critic to actor update ratio.")
+flags.DEFINE_boolean("load_checkpoint", False, "Whether to start from previous checkpoint or not.")
+flags.DEFINE_string("load_checkpoint_path", None, "Checkpoint to start training from.")
 
 flags.DEFINE_integer("batch_size", 256, "Batch size for training the policy.")
 flags.DEFINE_integer("max_steps", 1000000, "Maximum number of training steps.")
@@ -71,9 +79,10 @@ flags.DEFINE_integer("steps_per_update", 30, "Number of steps per update the ser
 
 flags.DEFINE_integer("log_period", 10, "Logging period.")
 flags.DEFINE_integer("eval_period", 2000, "Evaluation period.")
+flags.DEFINE_integer("loaded_checkpoint_step", 1000, "Loaded Checkpoint Step.")
 
 # flag to indicate if this is a leaner or a actor
-flags.DEFINE_boolean("learner", True, "Is this a learner or a trainer.")
+flags.DEFINE_boolean("learner", False, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("actor", False, "Is this a learner or a trainer.")
 flags.DEFINE_boolean("render", False, "Render the environment.")
 flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
@@ -120,7 +129,7 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
         )
         agent = agent.replace(state=ckpt)
 
-        for episode in range(FLAGS.eval_n_trajs):
+        for episode in tqdm.tqdm(range(FLAGS.eval_n_trajs), "Evaluation Trajectory"):
             obs, _ = env.reset()
             done = False
             start_time = time.time()
@@ -232,12 +241,12 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     The learner loop, which runs when "--learner" is set to True.
     """
     # set up wandb and logging
-    wandb_logger = None
-    # wandb_logger = make_wandb_logger(
-    #     project="serl_dev",
-    #     description=FLAGS.exp_name or FLAGS.env,
-    #     debug=FLAGS.debug,
-    # )
+    # wandb_logger = None
+    wandb_logger = make_wandb_logger(
+        project="serl_testing",
+        description=FLAGS.exp_name or FLAGS.env,
+        debug=FLAGS.debug,
+    )
 
     # To track the step in the training loop
     update_steps = 0
@@ -339,6 +348,7 @@ def main(_):
     executor.add_node(robot_interface_node)
     robot_interface_node.get_logger().info("Robot interface node started.")
     # executor.spin_once()
+    
     assert FLAGS.batch_size % num_devices == 0
     # seed
     rng = jax.random.PRNGKey(FLAGS.seed)
@@ -373,6 +383,16 @@ def main(_):
         image_keys=image_keys,
         encoder_type=FLAGS.encoder_type,
     )
+    
+    if(FLAGS.load_checkpoint):
+        print(f"Loading Checkpoint from Previous Run:{FLAGS.load_checkpoint_path}")
+        
+        ckpt = checkpoints.restore_checkpoint(
+            FLAGS.load_checkpoint_path,
+            agent.state,
+            step=FLAGS.loaded_checkpoint_step,
+        )
+        agent = agent.replace(state=ckpt)
 
     print("Agent created")
     # replicate agent across devices
@@ -392,19 +412,20 @@ def main(_):
             image_keys=image_keys,
         )
         print("Replay buffer initialized")
-        # demo_buffer = MemoryEfficientReplayBufferDataStore(
-        #     env.observation_space,
-        #     env.action_space,
-        #     capacity=10000,
-        #     image_keys=image_keys,
-        # )
-        # import pickle as pkl
+        print("Checkpoint Path: ", FLAGS.checkpoint_path)
+        demo_buffer = MemoryEfficientReplayBufferDataStore(
+            env.observation_space,
+            env.action_space,
+            capacity=10000,
+            image_keys=image_keys,
+        )
+        import pickle as pkl
 
-        # with open(FLAGS.demo_path, "rb") as f:
-        #     trajs = pkl.load(f)
-        #     for traj in trajs:
-        #         demo_buffer.insert(traj)
-        # print(f"demo buffer size: {len(demo_buffer)}")
+        with open(FLAGS.demo_path, "rb") as f:
+            trajs = pkl.load(f)
+            for traj in trajs:
+                demo_buffer.insert(traj)
+        print(f"demo buffer size: {len(demo_buffer)}")
 
         # learner loop
         print_green("starting learner loop")

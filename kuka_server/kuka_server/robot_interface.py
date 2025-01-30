@@ -17,6 +17,7 @@ from geometry_msgs.msg import WrenchStamped
 from control_msgs.action import FollowJointTrajectory
 import os
 import sys
+import socket
 from moveit_msgs.msg import (
     RobotState,
     RobotTrajectory,
@@ -34,6 +35,7 @@ from lbr_fri_idl.msg import LBRState
 import copy
 import optas
 
+
 class RobotInterfaceNode(Node):
     timeout_sec_ = 5.0
 
@@ -49,7 +51,8 @@ class RobotInterfaceNode(Node):
     fri_execute_action_name_ = "joint_trajectory_controller/follow_joint_trajectory"
     WRENCH_TOPIC = "/lbr/force_torque_broadcaster/wrench"
     robot_desc_topic_ = "robot_description"
-
+    port_id = 30200
+    robot_ip = "192.168.10.122"
     base_ = "link_0"  ###Changed for compatibility with latest lbr stack
     end_effector_ = "link_ee"
 
@@ -64,31 +67,42 @@ class RobotInterfaceNode(Node):
         self.robot_state = {}
 
         self.wrench_sub = self.create_subscription(
-            WrenchStamped,
-            self.WRENCH_TOPIC,
-            self.wrench_callback,
-            10
+            WrenchStamped, self.WRENCH_TOPIC, self.wrench_callback, 10
+        )
+
+        self.state_sub = self.create_subscription(
+            LBRState, self.lbr_state_topic_, self.state_callback, 100
         )
 
         self._init_jacobian()
+        self.session_ok = True
 
-        self.ik_client_ = self.create_client(GetPositionIK, self.ik_srv_name_, callback_group=self.ik_client_callback)
+        self.ik_client_ = self.create_client(
+            GetPositionIK, self.ik_srv_name_, callback_group=self.ik_client_callback
+        )
         if not self.ik_client_.wait_for_service(timeout_sec=self.timeout_sec_):
             self.get_logger().error("IK service not available.")
             exit(1)
 
-        self.fk_client_ = self.create_client(GetPositionFK, self.fk_srv_name_, callback_group=self.fk_client_callback)
+        self.fk_client_ = self.create_client(
+            GetPositionFK, self.fk_srv_name_, callback_group=self.fk_client_callback
+        )
         if not self.fk_client_.wait_for_service(timeout_sec=self.timeout_sec_):
             self.get_logger().error("FK service not available.")
             exit(1)
 
-        self.plan_client_ = self.create_client(GetMotionPlan, self.plan_srv_name_, callback_group=self.plan_client_callback)
+        self.plan_client_ = self.create_client(
+            GetMotionPlan, self.plan_srv_name_, callback_group=self.plan_client_callback
+        )
         if not self.plan_client_.wait_for_service(timeout_sec=self.timeout_sec_):
             self.get_logger().error("Plan service not available.")
             exit(1)
 
         self.execute_client_ = ActionClient(
-            self, ExecuteTrajectory, self.execute_action_name_, callback_group=self.execute_client_callback
+            self,
+            ExecuteTrajectory,
+            self.execute_action_name_,
+            callback_group=self.execute_client_callback,
         )
         if not self.execute_client_.wait_for_server(timeout_sec=self.timeout_sec_):
             self.get_logger().error("Execute action not available.")
@@ -103,6 +117,18 @@ class RobotInterfaceNode(Node):
         if not self.fri_execute_client_.wait_for_server(timeout_sec=self.timeout_sec_):
             self.get_logger().error("FRI Execute action not available.")
             exit(1)
+
+    def state_callback(self, state: LBRState):
+        self.session_state = state.session_state
+        external_torque = state.external_torque
+        # if(np.any(np.abs(external_torque)>10) or self.session_state!=4):
+        if self.session_state != 4:
+            self.get_logger().info(
+                f"Torque Exceeded or State Change to {self.session_state}"
+            )
+            self.session_ok = False
+
+        return
 
     def get_ik(self, target_pose: Pose) -> JointState | None:
         request = GetPositionIK.Request()
@@ -126,18 +152,17 @@ class RobotInterfaceNode(Node):
             return None
 
         return response.solution.joint_state
-    
+
     def wrench_callback(self, msg):
         self.latest_wrench = convert_wrench_to_numpy(msg)
         # self.get_logger().info(f"Received wrench data: {self.latest_wrench}")
         return
-    
-    
+
     def _init_jacobian(self):
         print("Initializing Jacobian")
 
         self._robot_description = self._retrieve_parameter(
-            "robot_state_publisher/get_parameters", "robot_description"
+            "/lbr/robot_state_publisher/get_parameters", "robot_description"
         ).string_value
         self._robot = optas.RobotModel(
             urdf_string=self._robot_description, time_derivs=[0, 1]
@@ -148,6 +173,7 @@ class RobotInterfaceNode(Node):
         )
 
         return
+
     def get_fk(self) -> Pose | None:
         current_joint_state = self.get_joint_state()
         if current_joint_state is None:
@@ -158,7 +184,6 @@ class RobotInterfaceNode(Node):
         current_robot_state.joint_state = current_joint_state
 
         request = GetPositionFK.Request()
-        self.get_logger().info(f"{self.namespace_}/{self.base_}")
         request.header.frame_id = f"{self.namespace_}/{self.base_}"
         request.header.stamp = self.get_clock().now().to_msg()
 
@@ -171,22 +196,24 @@ class RobotInterfaceNode(Node):
         if future.result() is None:
             self.get_logger().error("Failed to get FK solution")
             return None
-        
+
         response = future.result()
         if response.error_code.val != MoveItErrorCodes.SUCCESS:
             self.get_logger().error(
                 f"Failed to get FK solution: {response.error_code.val}"
             )
             return None
-        
+
         return response.pose_stamped[0].pose, current_joint_state
 
-    def get_fk_lbr(self, commanded:bool = False) -> Pose | None:
-        lbr_state_set, lbr_state = wait_for_message(LBRState, self, self.lbr_state_topic_)
+    def get_fk_lbr(self, commanded: bool = False) -> Pose | None:
+        lbr_state_set, lbr_state = wait_for_message(
+            LBRState, self, self.lbr_state_topic_
+        )
         joint_position = lbr_state.measured_joint_position.tolist()
         if commanded:
             joint_position = lbr_state.commanded_joint_position.tolist()
-        
+
         joint_position[2], joint_position[3] = joint_position[3], joint_position[2]
 
         current_robot_state = RobotState()
@@ -207,14 +234,14 @@ class RobotInterfaceNode(Node):
         if future.result() is None:
             self.get_logger().error("Failed to get FK solution")
             return None
-        
+
         response = future.result()
         if response.error_code.val != MoveItErrorCodes.SUCCESS:
             self.get_logger().error(
                 f"Failed to get FK solution: {response.error_code.val}"
             )
             return None
-        
+
         return response.pose_stamped[0].pose
 
     def sum_of_square_diff(
@@ -223,7 +250,7 @@ class RobotInterfaceNode(Node):
         return np.sum(
             np.square(np.subtract(joint_state_1.position, joint_state_2.position))
         )
-    
+
     def _retrieve_parameter(self, service: str, parameter_name: str) -> ParameterValue:
         parameter_client = self.create_client(GetParameters, service)
         while not parameter_client.wait_for_service(timeout_sec=1.0):
@@ -239,12 +266,11 @@ class RobotInterfaceNode(Node):
         if future.result() is None:
             self.get_logger().error(f"Failed to retrieve '{parameter_name}'.")
             return None
-        self.get_logger().info(f"Received '{parameter_name}' from '{service}'.")
         return future.result().values[0]
 
     def get_current_state(self):
         ##Return a dictionary with all the corresponding state variables
-        #Pose, Velocity, Force, Torque, Jacobian, Joint Angles, Joint Velocity, Gripper Pose
+        # Pose, Velocity, Force, Torque, Jacobian, Joint Angles, Joint Velocity, Gripper Pose
         self.robot_state["pose"] = np.zeros((7,))
         self.robot_state["vel"] = np.zeros((6,))
         self.robot_state["force"] = np.zeros((3,))
@@ -254,31 +280,71 @@ class RobotInterfaceNode(Node):
 
         ##TCP pose
         current_ee_geom_pose, current_joint_state = self.get_fk()
-        self.robot_state["pose"] = np.array([current_ee_geom_pose.position.x,current_ee_geom_pose.position.y,current_ee_geom_pose.position.z,
-                                             current_ee_geom_pose.orientation.x,current_ee_geom_pose.orientation.y,current_ee_geom_pose.orientation.z,current_ee_geom_pose.orientation.w])
-        
+        self.robot_state["pose"] = np.array(
+            [
+                current_ee_geom_pose.position.x,
+                current_ee_geom_pose.position.y,
+                current_ee_geom_pose.position.z,
+                current_ee_geom_pose.orientation.x,
+                current_ee_geom_pose.orientation.y,
+                current_ee_geom_pose.orientation.z,
+                current_ee_geom_pose.orientation.w,
+            ]
+        )
+
         ##Getting Joint Angles
-        joint_angles = current_joint_state.position
+        joint_angles = [
+            current_joint_state.position[0],
+            current_joint_state.position[1],
+            current_joint_state.position[3],
+            current_joint_state.position[2],
+            current_joint_state.position[4],
+            current_joint_state.position[5],
+            current_joint_state.position[6],
+        ]
+
         self.robot_state["q"] = joint_angles
-        joint_velocity = current_joint_state.velocity
+        joint_velocity = [
+            current_joint_state.velocity[0],
+            current_joint_state.velocity[1],
+            current_joint_state.velocity[3],
+            current_joint_state.velocity[2],
+            current_joint_state.velocity[4],
+            current_joint_state.velocity[5],
+            current_joint_state.velocity[6],
+        ]
+
         self.robot_state["dq"] = joint_velocity
 
         ##Getting Force and Wrench
         current_wrench = copy.deepcopy(self.latest_wrench)
         self.robot_state["force"] = current_wrench[:3]
         self.robot_state["torque"] = current_wrench[3:]
-        
-        
         self.robot_state["jacobian"] = self.jacobian_func(joint_angles)
-
-        self.robot_state["vel"] = np.dot(self.robot_state["jacobian"],joint_velocity)
-
+        self.robot_state["vel"] = np.dot(self.robot_state["jacobian"], joint_velocity)
         return self.robot_state
 
-    def move_to_pose(self, pose:np.ndarray):
-        print("Moving to Pose: ", pose)
+    def is_socket_open(self, host, port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)  # Timeout after 1 second
+        try:
+            sock.connect((host, port))
+            return True  # If the connection succeeds, the socket is open
+        except (socket.timeout, socket.error):
+            return False  # If there’s an error, the socket is likely closed
+        finally:
+            sock.close()  # Always close the socket after checking
+
+    def move_to_pose(self, pose: np.ndarray, reset_pose: np.ndarray):
+
+        if not self.session_ok:
+            print("ERROR in LBR FRI Restart the node")
+            input("Press Enter When Done Resetting")
+            input("Are you sure everything is good? Press Enter Again")
+            self.session_ok = True
+
         target_pose = Pose()
-        
+
         target_pose.position.x = float(pose[0])
         target_pose.position.y = float(pose[1])
         target_pose.position.z = float(pose[2])
@@ -289,8 +355,7 @@ class RobotInterfaceNode(Node):
         target_pose.orientation.z = float(pose[5])
         target_pose.orientation.w = float(pose[6])
 
-
-        traj = self.get_motion_plan(target_pose, True)
+        traj = self.get_motion_plan(target_pose, True, scaling_factor=0.04)
         if traj:
             client = self.get_motion_execute_client()
             goal = ExecuteTrajectory.Goal()
@@ -298,14 +363,13 @@ class RobotInterfaceNode(Node):
 
             future = client.send_goal_async(goal)
             rclpy.spin_until_future_complete(self, future)
-            
+
             goal_handle = future.result()
             if not goal_handle.accepted:
                 self.get_logger().error("Failed to execute trajectory")
             else:
                 self.get_logger().info("Trajectory accepted")
 
-            
             result_future = goal_handle.get_result_async()
 
             expect_duration = traj.joint_trajectory.points[-1].time_from_start
@@ -314,13 +378,8 @@ class RobotInterfaceNode(Node):
                 time.sleep(0.01)
 
             self.get_logger().info("Trajectory executed")
-        
-            self.get_logger().info("Current pose: "  + str(self.get_fk()[0]) )
-
 
         return
-
-
 
     def get_best_ik(self, target_pose: Pose, attempts: int = 100) -> JointState | None:
         current_joint_state = self.get_joint_state()
@@ -353,11 +412,15 @@ class RobotInterfaceNode(Node):
         if not current_joint_state_set:
             self.get_logger().error("Failed to get current joint state")
             return None
-        
+
         return current_joint_state
 
     def get_motion_plan(
-        self, target_pose: Pose, linear: bool = False, scaling_factor: float = .1, attempts: int = 10
+        self,
+        target_pose: Pose,
+        linear: bool = False,
+        scaling_factor: float = 0.1,
+        attempts: int = 10,
     ) -> RobotTrajectory | None:
         current_pose = self.get_fk()[0]
         if current_pose is None:
@@ -420,12 +483,12 @@ class RobotInterfaceNode(Node):
                 )
             else:
                 return response.motion_plan_response.trajectory
-            
+
         return None
 
     def get_motion_execute_client(self) -> ActionClient:
         return self.execute_client_
-    
+
     def get_fri_motion_execute(self, traj: RobotTrajectory, short_wait=False) -> bool:
         joint_trajectory_goal = FollowJointTrajectory.Goal()
         joint_trajectory_goal.trajectory = traj.joint_trajectory
@@ -443,11 +506,21 @@ class RobotInterfaceNode(Node):
 
         execution_finished = False
         expected_timout = time.time() + 30
-        if short_wait: 
-            expected_timout = time.time() + 2.0     
+        if short_wait:
+            expected_timout = time.time() + 2.0
         while not execution_finished and time.time() < expected_timout:
             _, lbr_state = wait_for_message(LBRState, self, self.lbr_state_topic_)
-            if np.max(np.abs(np.subtract(lbr_state.measured_joint_position, traj.joint_trajectory.points[-1].positions))) < 0.0002:
+            if (
+                np.max(
+                    np.abs(
+                        np.subtract(
+                            lbr_state.measured_joint_position,
+                            traj.joint_trajectory.points[-1].positions,
+                        )
+                    )
+                )
+                < 0.0002
+            ):
                 execution_finished = True
 
             time.sleep(0.01)
