@@ -6,4 +6,5 @@
 	url = https://github.com/lbr-stack/lbr_fri_idl.git
 [submodule "lbr_fri_ros2_stack"]
 	path = lbr_fri_ros2_stack
-	url = https://github.com/lbr-stack/lbr_fri_ros2_stack.git
+	url = https://github.com/RROS-Lab/serl_lbr_fri_ros2_stack.git
+	branch=serl-kuka
