@@ -3,7 +3,8 @@
 	url = git@github.com:lbr-stack/fri.git
 [submodule "lbr_fri_idl"]
 	path = lbr_fri_idl
-	url = https://github.com/lbr-stack/lbr_fri_idl.git
+	url = https://github.com/RROS-Lab/serl_lbr_fri_idl.git
+	branch=serl-kuka
 [submodule "lbr_fri_ros2_stack"]
 	path = lbr_fri_ros2_stack
 	url = https://github.com/RROS-Lab/serl_lbr_fri_ros2_stack.git
