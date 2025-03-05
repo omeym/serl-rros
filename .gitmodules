@@ -9,3 +9,7 @@
 	path = lbr_fri_ros2_stack
 	url = https://github.com/RROS-Lab/serl_lbr_fri_ros2_stack.git
 	branch=serl-kuka
+[submodule "data_collector"]
+	path = data_collector
+	url = https://github.com/nikitasarawgi/expert_data_collector.git
+	branch = data-collector-only
