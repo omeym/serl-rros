@@ -1,12 +1,16 @@
 """Gym Interface for Franka"""
+
 import sys
 import time
 import getpass
+
 username = getpass.getuser()
 env = "serl"
 print("Ensure to change anaconda3 or miniconda3 and change your environment name")
 print("Conda Environment name is: ", env)
-sys.path.append("/home/"+username+"/anaconda3/envs/"+env+"/lib/python3.10/site-packages")
+sys.path.append(
+    "/home/" + username + "/anaconda3/envs/" + env + "/lib/python3.10/site-packages"
+)
 
 import numpy as np
 import gym
@@ -19,14 +23,14 @@ import threading
 from datetime import datetime
 from collections import OrderedDict
 from typing import Dict
+
 sys.path.append("/home/cam/omey_ws/serl-rros/src/")
 from serl_robot_infra.franka_env.camera.video_capture import VideoCapture
 from serl_robot_infra.franka_env.camera.rs_capture import RSCapture
-from serl_robot_infra.franka_env.utils.rotations import euler_2_quat, quat_2_euler
+from serl_robot_infra.kuka_env.utils.rotations import euler_2_quat, quat_2_euler
 
 
 # from kuka_server.kuka_server.robot_interface import RobotInterfaceNode
-
 
 
 class ImageDisplayer(threading.Thread):
@@ -88,9 +92,9 @@ class KukaEnv(gym.Env):
         save_video=False,
         config: DefaultEnvConfig = None,
         max_episode_length=100,
-        robot_interface_node=None
+        robot_interface_node=None,
     ):
-        print("Initializing KukaEnv")  
+        print("Initializing KukaEnv")
         self.robot_interface_node = robot_interface_node
         self.action_scale = config.ACTION_SCALE
         self._TARGET_POSE = config.TARGET_POSE
@@ -98,6 +102,7 @@ class KukaEnv(gym.Env):
         self.url = config.ROBOT_IP
         self.config = config
         self.max_episode_length = max_episode_length
+        # self.max_episode_length = 5
 
         # convert last 3 elements from euler to quat, from size (6,) to (7,)
         self.resetpos = np.concatenate(
@@ -142,7 +147,7 @@ class KukaEnv(gym.Env):
             np.ones((7,), dtype=np.float32) * -1,
             np.ones((7,), dtype=np.float32),
         )
-        
+
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
@@ -156,7 +161,7 @@ class KukaEnv(gym.Env):
                     }
                 ),
                 "images": gym.spaces.Dict(
-                    {   
+                    {
                         "wrist_1": gym.spaces.Box(
                             0, 255, shape=(128, 128, 3), dtype=np.uint8
                         ),
@@ -186,48 +191,68 @@ class KukaEnv(gym.Env):
         pose[:3] = np.clip(
             pose[:3], self.xyz_bounding_box.low, self.xyz_bounding_box.high
         )
-        euler = Rotation.from_quat(pose[3:]).as_euler("xyz")
+        euler = Rotation.from_quat(pose[3:]).as_euler("ZYX")
 
         # Clip first euler angle separately due to discontinuity from pi to -pi
-        sign = np.sign(euler[0])
-        euler[0] = sign * (
+        sign = np.sign(euler[2])
+        euler[2] = sign * (
             np.clip(
-                np.abs(euler[0]),
-                self.rpy_bounding_box.low[0],
-                self.rpy_bounding_box.high[0],
+                np.abs(euler[2]),
+                self.rpy_bounding_box.low[2],
+                self.rpy_bounding_box.high[2],
             )
         )
 
-        euler[1:] = np.clip(
-            euler[1:], self.rpy_bounding_box.low[1:], self.rpy_bounding_box.high[1:]
+        euler[:2] = np.clip(
+            euler[:2], self.rpy_bounding_box.low[:2], self.rpy_bounding_box.high[:2]
         )
-        pose[3:] = Rotation.from_euler("xyz", euler).as_quat()
+        pose[3:] = Rotation.from_euler("ZYX", euler).as_quat()
 
         return pose
 
     def step(self, action: np.ndarray) -> tuple:
         """standard gym step function."""
         print("In step function")
-        
+
         start_time = time.time()
+        # nisara : Comment
+        # print("Action before clipping: ", action)
         action = np.clip(action, self.action_space.low, self.action_space.high)
         xyz_delta = action[:3]
+        # nisara : Comment
+        # print("Action after clipping ==xyz_delta==: ", xyz_delta)
 
         self.nextpos = self.currpos.copy()
+        # nisara : Comment
+        # print("Current position in step: ", self.nextpos)
         self.nextpos[:3] = self.nextpos[:3] + xyz_delta * self.action_scale[0]
 
         # GET ORIENTATION FROM ACTION
-        self.nextpos[3:] = (
-            Rotation.from_euler("xyz", action[3:6] * self.action_scale[1])
-            * Rotation.from_quat(self.currpos[3:])
+        self.nextpos[3:] = Rotation.from_matrix(
+            (
+                np.matmul(
+                    Rotation.from_quat(self.currpos[3:]).as_matrix(),
+                    Rotation.from_euler(
+                        "ZYX", action[3:6] * self.action_scale[1]
+                    ).as_matrix(),
+                )
+            )
         ).as_quat()
 
+        nextPos_euler = Rotation.from_quat(self.nextpos[3:]).as_euler(
+            "ZYX", degrees=True
+        )
+        # nisara : Comment
+        # print("Next position's euler: ", nextPos_euler)
+        # print("Next position in step: ", self.nextpos)
+
         ##Remove gripper action NOTE: Omey
-        if(self.use_gripper): 
+        if self.use_gripper:
             gripper_action = action[6] * self.action_scale[2]
             gripper_action_effective = self._send_gripper_command(gripper_action)
-        
+
         self._send_pos_command(self.clip_safety_box(self.nextpos))
+        # self._send_pos_command(self.nextpos)
 
         self.curr_path_length += 1
         dt = time.time() - start_time
@@ -235,7 +260,7 @@ class KukaEnv(gym.Env):
 
         self._update_currpos()
         ob = self._get_obs()
-        if(self.use_gripper):
+        if self.use_gripper:
             reward = self.compute_reward(ob, gripper_action_effective)
         else:
             reward = self.compute_reward(ob)
@@ -243,10 +268,10 @@ class KukaEnv(gym.Env):
         done = self.curr_path_length >= self.max_episode_length or reward == 1
         return ob, reward, done, False, {}
 
-    def compute_reward(self, obs, gripper_action_effective = None) -> bool:
+    def compute_reward(self, obs, gripper_action_effective=None) -> bool:
         """We are using a sparse reward function."""
         current_pose = obs["state"]["tcp_pose"]
-        
+
         # convert from quat to euler first
         euler_angles = quat_2_euler(current_pose[3:])
         euler_angles = np.abs(euler_angles)
@@ -319,7 +344,10 @@ class KukaEnv(gym.Env):
         """
         # Change to precision mode for reset
         # requests.post(self.url + "update_param", json=self.config.PRECISION_PARAM)
-        
+
+        # nisara : Comment
+        # print("In the function go_to_rest to reset the pose")
+
         # Perform Carteasian reset
         if self.randomreset:  # randomize reset position in xy plane
             reset_pose = self.resetpos.copy()
@@ -380,7 +408,7 @@ class KukaEnv(gym.Env):
             self.close_cameras()
 
         self.cap = OrderedDict()
-        
+
         for cam_name, cam_serial in name_serial_dict.items():
             cap = VideoCapture(
                 RSCapture(name=cam_name, serial_number=cam_serial, depth=False)
@@ -402,10 +430,21 @@ class KukaEnv(gym.Env):
 
     def _send_pos_command(self, pos: np.ndarray):
         """Internal function to send position command to the robot."""
+        # nisara : Comment
+        # print("Current pose in _send_pos_command: ", self.currpos)
+
         arr = np.array(pos).astype(np.float32)
+
+        # nisara : Comment
+        # arr_euler = Rotation.from_quat(arr[3:]).as_euler("ZYX", degrees=True)
+        # print("In euler, send_pos_command: ", arr_euler)
+        # print("In the function to send position command to move to pos: ", arr)
+        # print("In the same function, reset pose: ", self.resetpos)
+        # print("\n")
+
         self.robot_interface_node.move_to_pose(arr, self.resetpos)
         print("Done moving the robot")
-        
+
     def _send_gripper_command(self, pos: float, mode="binary"):
         """Internal function to send gripper command to the robot."""
         if mode == "binary":
@@ -440,12 +479,14 @@ class KukaEnv(gym.Env):
 
         self.currforce[:] = np.array(ps["force"], dtype=np.float32)
         self.currtorque[:] = np.array(ps["torque"], dtype=np.float32)
-        self.currjacobian[:] = np.reshape(np.array(ps["jacobian"], dtype=np.float32), (6, 7))
+        self.currjacobian[:] = np.reshape(
+            np.array(ps["jacobian"], dtype=np.float32), (6, 7)
+        )
 
         self.q[:] = np.array(ps["q"], dtype=np.float32)
         self.dq[:] = np.array(ps["dq"], dtype=np.float32)
-        
-        if(self.use_gripper):
+
+        if self.use_gripper:
             self.curr_gripper_pos = np.array(ps["gripper_pos"])
 
     def _get_obs(self) -> dict:
@@ -459,8 +500,5 @@ class KukaEnv(gym.Env):
         return copy.deepcopy(dict(images=images, state=state_observation))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     env = gym.make("KukaEnv")
-    
-    
-    

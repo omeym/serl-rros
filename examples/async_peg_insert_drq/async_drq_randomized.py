@@ -2,11 +2,14 @@
 import sys
 import os
 import getpass
+
 username = getpass.getuser()
 env = "serl"
 print("Ensure to change anaconda3 or miniconda3 and change your environment name")
 print("Conda Environment name is: ", env)
-sys.path.append("/home/"+username+"/anaconda3/envs/"+env+"/lib/python3.10/site-packages")
+sys.path.append(
+    "/home/" + username + "/anaconda3/envs/" + env + "/lib/python3.10/site-packages"
+)
 import rclpy
 import rclpy.duration
 from rclpy.executors import MultiThreadedExecutor
@@ -41,15 +44,17 @@ from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
 
 import os
+
 MAIN_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(MAIN_DIR)
 from serl_robot_infra.kuka_env.envs.relative_env import RelativeFrame
-from serl_robot_infra.franka_env.envs.wrappers import (
+from serl_robot_infra.kuka_env.envs.wrappers import (
     Quat2EulerWrapper,
 )
 
 import serl_robot_infra.franka_env
 import serl_robot_infra.kuka_env
+
 # sys.argv = sys.argv[:1]
 
 # # `app.run` calls `sys.exit`
@@ -66,7 +71,9 @@ flags.DEFINE_integer("max_traj_length", 100, "Maximum length of trajectory.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_bool("save_model", False, "Whether to save model.")
 flags.DEFINE_integer("critic_actor_ratio", 4, "critic to actor update ratio.")
-flags.DEFINE_boolean("load_checkpoint", False, "Whether to start from previous checkpoint or not.")
+flags.DEFINE_boolean(
+    "load_checkpoint", False, "Whether to start from previous checkpoint or not."
+)
 flags.DEFINE_string("load_checkpoint_path", None, "Checkpoint to start training from.")
 
 flags.DEFINE_integer("batch_size", 256, "Batch size for training the policy.")
@@ -194,6 +201,8 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
                     deterministic=False,
                 )
                 actions = np.asarray(jax.device_get(actions))
+                # nisara : Comment
+                # print("Actions in Training Loop: ", actions)
 
         # Step environment
         with timer.context("step_env"):
@@ -348,7 +357,7 @@ def main(_):
     executor.add_node(robot_interface_node)
     robot_interface_node.get_logger().info("Robot interface node started.")
     # executor.spin_once()
-    
+
     assert FLAGS.batch_size % num_devices == 0
     # seed
     rng = jax.random.PRNGKey(FLAGS.seed)
@@ -359,7 +368,7 @@ def main(_):
         FLAGS.env,
         fake_env=FLAGS.learner,
         save_video=FLAGS.eval_checkpoint_step,
-        robot_interface_node=robot_interface_node
+        robot_interface_node=robot_interface_node,
     )
     print("Environment initialized")
     # env = GripperCloseEnv(env)
@@ -383,10 +392,10 @@ def main(_):
         image_keys=image_keys,
         encoder_type=FLAGS.encoder_type,
     )
-    
-    if(FLAGS.load_checkpoint):
+
+    if FLAGS.load_checkpoint:
         print(f"Loading Checkpoint from Previous Run:{FLAGS.load_checkpoint_path}")
-        
+
         ckpt = checkpoints.restore_checkpoint(
             FLAGS.load_checkpoint_path,
             agent.state,
@@ -429,11 +438,7 @@ def main(_):
 
         # learner loop
         print_green("starting learner loop")
-        learner(
-            sampling_rng,
-            agent,
-            replay_buffer
-        )
+        learner(sampling_rng, agent, replay_buffer)
 
     elif FLAGS.actor:
         print("Initializing Actor Node")
@@ -446,9 +451,6 @@ def main(_):
 
     else:
         raise NotImplementedError("Must be either a learner or an actor")
-    
-
-    
 
     rclpy.shutdown()
 

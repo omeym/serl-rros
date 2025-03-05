@@ -132,10 +132,10 @@ class RobotInterfaceNode(Node):
 
     def get_ik(self, target_pose: Pose) -> JointState | None:
         request = GetPositionIK.Request()
-
         request.ik_request.group_name = self.move_group_name_
         tf_prefix = self.get_namespace()[1:]
         request.ik_request.pose_stamped.header.frame_id = f"{tf_prefix}/{self.base_}"
+
         request.ik_request.pose_stamped.header.stamp = self.get_clock().now().to_msg()
         request.ik_request.pose_stamped.pose = target_pose
         request.ik_request.avoid_collisions = True
@@ -204,6 +204,10 @@ class RobotInterfaceNode(Node):
             )
             return None
 
+        # print(
+        #     "In get_fk, printing the current pose after fk: ",
+        #     response.pose_stamped[0].pose,
+        # )
         return response.pose_stamped[0].pose, current_joint_state
 
     def get_fk_lbr(self, commanded: bool = False) -> Pose | None:
@@ -389,7 +393,7 @@ class RobotInterfaceNode(Node):
 
         best_cost = np.inf
         best_joint_state = None
-
+        # self.get_logger().info(f"Computing Best IK for: {target_pose}")
         for _ in range(attempts):
             joint_state = self.get_ik(target_pose)
             if joint_state is None:
@@ -431,12 +435,14 @@ class RobotInterfaceNode(Node):
         #     return RobotTrajectory()
 
         current_joint_state = self.get_joint_state()
+        # self.get_logger().info(f"Current joint state: {current_joint_state}")
         if current_joint_state is None:
             self.get_logger().error("Failed to get joint state")
             return None
 
         current_robot_state = RobotState()
         current_robot_state.joint_state.position = current_joint_state.position
+        current_robot_state.joint_state.name = current_joint_state.name
 
         target_joint_state = self.get_best_ik(target_pose)
         if target_joint_state is None:

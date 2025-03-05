@@ -12,10 +12,10 @@ python3 async_drq_randomized.py "$@" \
     --batch_size 256 \
     --eval_period 2000 \
     --encoder_type resnet-pretrained \
-    --demo_path /home/omey/nisara/expert_data_collector/processed_replay/processed_replay/2013-01-01_01-09-43/recorded_data.pkl \
+    --demo_path /home/omey/SERL/src/data_collector/data_collector/feb_28_data/kuka_csv_logs/all_success_final.pkl \
     --checkpoint_period 1000 \
     --loaded_checkpoint_step 1000 \
     --load_checkpoint_path /home/omey/SERL/src/examples/async_peg_insert_drq/checkpoints_12/ \
-    --checkpoint_path /home/omey/SERL/src/examples/async_peg_insert_drq/checkpoints/
+    --checkpoint_path /home/omey/SERL/src/examples/async_peg_insert_drq/checkpoints_new/ \
     # --load_checkpoint 0 \
     
