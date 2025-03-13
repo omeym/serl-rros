@@ -431,7 +431,7 @@ def main(_):
         import pickle as pkl
 
         with open(FLAGS.demo_path, "rb") as f:
-            trajs = pkl.load(f)
+            trajs = pkl.load(f, fix_imports=True)
             for traj in trajs:
                 demo_buffer.insert(traj)
         print(f"demo buffer size: {len(demo_buffer)}")

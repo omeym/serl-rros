@@ -9,7 +9,7 @@ env = "serl"
 print("Ensure to change anaconda3 or miniconda3 and change your environment name")
 print("Conda Environment name is: ", env)
 sys.path.append(
-    "/home/" + username + "/anaconda3/envs/" + env + "/lib/python3.10/site-packages"
+    "/home/" + username + "/miniconda3/envs/" + env + "/lib/python3.10/site-packages"
 )
 
 import numpy as np
@@ -24,7 +24,7 @@ from datetime import datetime
 from collections import OrderedDict
 from typing import Dict
 
-sys.path.append("/home/cam/omey_ws/serl-rros/src/")
+sys.path.append("/home/rp/SERL/src/")
 from serl_robot_infra.franka_env.camera.video_capture import VideoCapture
 from serl_robot_infra.franka_env.camera.rs_capture import RSCapture
 from serl_robot_infra.kuka_env.utils.rotations import euler_2_quat, quat_2_euler
@@ -212,7 +212,7 @@ class KukaEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> tuple:
         """standard gym step function."""
-        print("In step function")
+        # print("In step function")
 
         start_time = time.time()
         # nisara : Comment
@@ -239,9 +239,9 @@ class KukaEnv(gym.Env):
             )
         ).as_quat()
 
-        nextPos_euler = Rotation.from_quat(self.nextpos[3:]).as_euler(
-            "ZYX", degrees=True
-        )
+        # nextPos_euler = Rotation.from_quat(self.nextpos[3:]).as_euler(
+        #     "ZYX", degrees=True
+        # )
         # nisara : Comment
         # print("Next position's euler: ", nextPos_euler)
         # print("Next position in step: ", self.nextpos)
@@ -362,6 +362,8 @@ class KukaEnv(gym.Env):
             self._send_pos_command(reset_pose)
         else:
             reset_pose = self.resetpos.copy()
+            # nisara : Comment
+            # print("In reset pose, sending the reset pose: ", reset_pose)
             self._send_pos_command(reset_pose)
 
         # Change to compliance mode

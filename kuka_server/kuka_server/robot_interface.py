@@ -372,7 +372,7 @@ class RobotInterfaceNode(Node):
             if not goal_handle.accepted:
                 self.get_logger().error("Failed to execute trajectory")
             else:
-                self.get_logger().info("Trajectory accepted")
+                self.get_logger().debug("Trajectory accepted")
 
             result_future = goal_handle.get_result_async()
 
@@ -381,7 +381,7 @@ class RobotInterfaceNode(Node):
             while not result_future.done() and time.time() < expect_time:
                 time.sleep(0.01)
 
-            self.get_logger().info("Trajectory executed")
+            self.get_logger().debug("Trajectory executed")
 
         return
 
@@ -393,7 +393,9 @@ class RobotInterfaceNode(Node):
 
         best_cost = np.inf
         best_joint_state = None
+        # nisara : Comment
         # self.get_logger().info(f"Computing Best IK for: {target_pose}")
+
         for _ in range(attempts):
             joint_state = self.get_ik(target_pose)
             if joint_state is None:
@@ -416,6 +418,9 @@ class RobotInterfaceNode(Node):
         if not current_joint_state_set:
             self.get_logger().error("Failed to get current joint state")
             return None
+        # nisara : Comment
+        # if current_joint_state is None:
+        #     print("in get_joint_state function, Current Joint State: ", current_joint_state)
 
         return current_joint_state
 
@@ -444,6 +449,8 @@ class RobotInterfaceNode(Node):
         current_robot_state.joint_state.position = current_joint_state.position
         current_robot_state.joint_state.name = current_joint_state.name
 
+        # nisara : Comment
+        # print("Printing target pose before it goes to get_best_ik: ", target_pose)
         target_joint_state = self.get_best_ik(target_pose)
         if target_joint_state is None:
             self.get_logger().error("Failed to get target joint state")
@@ -505,7 +512,7 @@ class RobotInterfaceNode(Node):
         if not goal_handle.accepted:
             self.get_logger().error("Trajectory goal rejected")
             return False
-        self.get_logger().info("Trajectory goal accepted")
+        self.get_logger().debug("Trajectory goal accepted")
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self, result_future)
@@ -531,7 +538,7 @@ class RobotInterfaceNode(Node):
 
             time.sleep(0.01)
 
-        self.get_logger().info("Trajectory executed")
+        self.get_logger().debug("Trajectory executed")
         return True
 
 
