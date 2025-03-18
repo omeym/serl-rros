@@ -423,6 +423,15 @@ class RobotInterfaceNode(Node):
         #     print("in get_joint_state function, Current Joint State: ", current_joint_state)
 
         return current_joint_state
+    
+    # https://github.com/moveit/moveit/issues/3583#issuecomment-2035540755
+    def adjust_trajectory_timings(self, trajectory):
+        epsilon = 0.001  # Small time increment to adjust duplicate timings
+        for i in range(1, len(trajectory.joint_trajectory.points)):
+            if trajectory.joint_trajectory.points[i].time_from_start == trajectory.joint_trajectory.points[i - 1].time_from_start:
+                print("THIS IS TRUE HERE")
+                trajectory.joint_trajectory.points[i].time_from_start += rclpy.duration.Duration(seconds=epsilon)
+        return trajectory
 
     def get_motion_plan(
         self,
@@ -482,7 +491,8 @@ class RobotInterfaceNode(Node):
             request.motion_plan_request.pipeline_id = "ompl"
             request.motion_plan_request.planner_id = "APSConfigDefault"
 
-        for _ in range(attempts):
+        for i in range(attempts):
+            # print(f"Attempt {i} to generate a trajectory")
             plan_future = self.plan_client_.call_async(request)
             rclpy.spin_until_future_complete(self, plan_future)
 
@@ -495,7 +505,10 @@ class RobotInterfaceNode(Node):
                     f"Failed to get motion plan: {response.motion_plan_response.error_code.val}"
                 )
             else:
-                return response.motion_plan_response.trajectory
+                traj = response.motion_plan_response.trajectory
+                # # Adjust timings as mentioned above
+                # traj = self.adjust_trajectory_timings(traj)  
+                return traj
 
         return None
 

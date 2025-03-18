@@ -223,7 +223,7 @@ class KukaEnv(gym.Env):
         # print("Action after clipping ==xyz_delta==: ", xyz_delta)
 
         self.nextpos = self.currpos.copy()
-        # nisara : Comment
+        # # nisara : Comment
         # print("Current position in step: ", self.nextpos)
         self.nextpos[:3] = self.nextpos[:3] + xyz_delta * self.action_scale[0]
 
@@ -239,10 +239,10 @@ class KukaEnv(gym.Env):
             )
         ).as_quat()
 
+        # # nisara : Comment
         # nextPos_euler = Rotation.from_quat(self.nextpos[3:]).as_euler(
         #     "ZYX", degrees=True
         # )
-        # nisara : Comment
         # print("Next position's euler: ", nextPos_euler)
         # print("Next position in step: ", self.nextpos)
 
@@ -275,8 +275,11 @@ class KukaEnv(gym.Env):
         # convert from quat to euler first
         euler_angles = quat_2_euler(current_pose[3:])
         euler_angles = np.abs(euler_angles)
+        # nisara: IMPORTANT: Convert the euler angles of target pose to absolute values too 
+        target_pose = self._TARGET_POSE.copy()
+        target_pose[3:] = np.abs(target_pose[3:])
         current_pose = np.hstack([current_pose[:3], euler_angles])
-        delta = np.abs(current_pose - self._TARGET_POSE)
+        delta = np.abs(current_pose - target_pose)
         if np.all(delta < self._REWARD_THRESHOLD):
             print("Received reward 1!!!!")
             reward = 1
@@ -305,7 +308,8 @@ class KukaEnv(gym.Env):
         for key, cap in self.cap.items():
             try:
                 rgb = cap.read()
-                cropped_rgb = self.crop_image(key, rgb)
+                cropped_rgb = self.crop_image(key, rgb) 
+                cropped_rgb = np.array(cropped_rgb)
                 resized = cv2.resize(
                     cropped_rgb, self.observation_space["images"][key].shape[:2][::-1]
                 )
@@ -432,20 +436,24 @@ class KukaEnv(gym.Env):
 
     def _send_pos_command(self, pos: np.ndarray):
         """Internal function to send position command to the robot."""
-        # nisara : Comment
-        # print("Current pose in _send_pos_command: ", self.currpos)
+
+        # # nisara : Comment
+        # np.set_printoptions(precision=3, suppress=True)
+        # curr_pos_euler = Rotation.from_quat(self.currpos[3:]).as_euler("ZYX", degrees=True)
+        # print_curr_pos = np.concatenate([self.currpos[:3] * 1000, curr_pos_euler])
+        # print("Current pose in _send_pos_command: ", print_curr_pos)
 
         arr = np.array(pos).astype(np.float32)
 
-        # nisara : Comment
-        # arr_euler = Rotation.from_quat(arr[3:]).as_euler("ZYX", degrees=True)
-        # print("In euler, send_pos_command: ", arr_euler)
-        # print("In the function to send position command to move to pos: ", arr)
-        # print("In the same function, reset pose: ", self.resetpos)
-        # print("\n")
+        # # nisara : Comment
+        # arr_euler = Rotation.from_quat(arr[3:]).as_euler("ZYX", degrees=True)                                       
+        # print_arr_pos = np.concatenate([arr[:3] * 1000, arr_euler])
+        # print("In the function to send position command to move to pos: ", print_arr_pos)
+        # # print("In the same function, reset pose: ", self.resetpos)
 
         self.robot_interface_node.move_to_pose(arr, self.resetpos)
         print("Done moving the robot")
+        # print("\n")
 
     def _send_gripper_command(self, pos: float, mode="binary"):
         """Internal function to send gripper command to the robot."""

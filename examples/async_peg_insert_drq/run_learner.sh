@@ -12,10 +12,10 @@ python3 async_drq_randomized.py "$@" \
     --batch_size 256 \
     --eval_period 2000 \
     --encoder_type resnet-pretrained \
-    --demo_path /home/rp/SERL/src/examples/async_peg_insert_drq/demo_data/updated_final.pkl \
+    --demo_path /home/rp/SERL/src/examples/async_peg_insert_drq/demo_data/relaxed_reward_success.pkl \
     --checkpoint_period 1000 \
-    --loaded_checkpoint_step 43000 \
-    --load_checkpoint_path /home/rp/SERL/src/examples/async_peg_insert_drq/checkpoints/ \
-    --checkpoint_path /home/rp/SERL/src/examples/async_peg_insert_drq/checkpoints_new/ \
-    --load_checkpoint 1 \
+    --loaded_checkpoint_step 1000 \
+    --load_checkpoint_path /home/rp/SERL/src/examples/async_peg_insert_drq/relaxed_reward/checkpoints/ \
+    --checkpoint_path /home/rp/SERL/src/examples/async_peg_insert_drq/relaxed_reward/checkpoints_new/ \
+    # --load_checkpoint 0 \
     

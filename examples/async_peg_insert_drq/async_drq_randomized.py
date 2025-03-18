@@ -428,7 +428,7 @@ def main(_):
             capacity=10000,
             image_keys=image_keys,
         )
-        import pickle as pkl
+        import pickle5 as pkl
 
         with open(FLAGS.demo_path, "rb") as f:
             trajs = pkl.load(f, fix_imports=True)

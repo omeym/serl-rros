@@ -25,7 +25,7 @@ class PegEnvConfig(DefaultEnvConfig):
         ]
     )
     REWARD_THRESHOLD: np.ndarray = np.array(
-        [0.002, 0.002, 0.01, 0.0349066, 0.0349066, 0.0349066]
+        [0.002, 0.002, 0.025, 0.0349066, 0.0349066, 0.0349066]
     )
     APPLY_GRIPPER_PENALTY = False
     ACTION_SCALE = np.array([0.02, 0.1, 1])
