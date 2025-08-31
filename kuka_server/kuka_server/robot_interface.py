@@ -15,6 +15,7 @@ import rclpy.task
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
 from control_msgs.action import FollowJointTrajectory
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import os
 import sys
 import socket
@@ -48,7 +49,7 @@ class RobotInterfaceNode(Node):
     ik_srv_name_ = "compute_ik"
     fk_srv_name_ = "compute_fk"
     execute_action_name_ = "execute_trajectory"
-    fri_execute_action_name_ = "joint_trajectory_controller/follow_joint_trajectory"
+    fri_execute_action_name_ = "/lbr/joint_trajectory_controller/follow_joint_trajectory"
     WRENCH_TOPIC = "/lbr/force_torque_broadcaster/wrench"
     robot_desc_topic_ = "robot_description"
     port_id = 30200
@@ -359,7 +360,7 @@ class RobotInterfaceNode(Node):
         target_pose.orientation.z = float(pose[5])
         target_pose.orientation.w = float(pose[6])
 
-        traj = self.get_motion_plan(target_pose, True, scaling_factor=0.04)
+        traj = self.get_motion_plan(target_pose=target_pose, linear=True, scaling_factor=0.2)
         if traj:
             client = self.get_motion_execute_client()
             goal = ExecuteTrajectory.Goal()
@@ -385,6 +386,46 @@ class RobotInterfaceNode(Node):
 
         return
 
+    def move_to_joint_pos(self, joint_pos: np.ndarray):
+        
+        if not self.session_ok:
+            print("ERROR in LBR FRI Restart the node")
+            input("Press Enter When Done Resetting")
+            input("Are you sure everything is good? Press Enter Again")
+            self.session_ok = True
+
+        
+
+        goal_msg = FollowJointTrajectory.Goal()
+        trajectory_msg = JointTrajectory()
+        trajectory_msg.joint_names = ["A1", "A2", "A4", "A3", "A5", "A6", "A7"]
+
+        point = JointTrajectoryPoint()
+        point.positions = [float(val) for val in joint_pos]
+        point.time_from_start.sec = 2
+        trajectory_msg.points.append(point)
+        goal_msg.trajectory = trajectory_msg
+        self.fri_execute_client_.wait_for_server()
+
+        send_goal_future = self.fri_execute_client_.send_goal_async(
+            goal_msg
+        )
+
+        rclpy.spin_until_future_complete(self, send_goal_future)
+
+        goal_handle = send_goal_future.result()
+
+        if not goal_handle.accepted:
+            print(f"Goal for init point was rejected")
+            return
+
+        print(f"Goal for init point was accepted")
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, get_result_future)
+        result = get_result_future.result().result
+        time.sleep(1)
+        return
+
     def get_best_ik(self, target_pose: Pose, attempts: int = 100) -> JointState | None:
         current_joint_state = self.get_joint_state()
         if current_joint_state is None:
@@ -393,8 +434,6 @@ class RobotInterfaceNode(Node):
 
         best_cost = np.inf
         best_joint_state = None
-        # nisara : Comment
-        # self.get_logger().info(f"Computing Best IK for: {target_pose}")
 
         for _ in range(attempts):
             joint_state = self.get_ik(target_pose)
@@ -418,9 +457,7 @@ class RobotInterfaceNode(Node):
         if not current_joint_state_set:
             self.get_logger().error("Failed to get current joint state")
             return None
-        # nisara : Comment
-        # if current_joint_state is None:
-        #     print("in get_joint_state function, Current Joint State: ", current_joint_state)
+
 
         return current_joint_state
     
@@ -435,10 +472,11 @@ class RobotInterfaceNode(Node):
 
     def get_motion_plan(
         self,
-        target_pose: Pose,
+        target_pose: Pose = None,
         linear: bool = False,
         scaling_factor: float = 0.1,
         attempts: int = 10,
+        target_joint_state_in: np.ndarray = None,
     ) -> RobotTrajectory | None:
         current_pose = self.get_fk()[0]
         if current_pose is None:
@@ -449,7 +487,6 @@ class RobotInterfaceNode(Node):
         #     return RobotTrajectory()
 
         current_joint_state = self.get_joint_state()
-        # self.get_logger().info(f"Current joint state: {current_joint_state}")
         if current_joint_state is None:
             self.get_logger().error("Failed to get joint state")
             return None
@@ -458,13 +495,18 @@ class RobotInterfaceNode(Node):
         current_robot_state.joint_state.position = current_joint_state.position
         current_robot_state.joint_state.name = current_joint_state.name
 
-        # nisara : Comment
-        # print("Printing target pose before it goes to get_best_ik: ", target_pose)
-        target_joint_state = self.get_best_ik(target_pose)
-        if target_joint_state is None:
-            self.get_logger().error("Failed to get target joint state")
-            return None
-
+        if target_joint_state_in is not None:
+            target_joint_state = JointState()
+            target_joint_state.position = [float(val) for val in target_joint_state_in]
+            target_joint_state.name = current_joint_state.name
+            # print("Printing target joint state: ", target_joint_state)
+        
+        else:
+            target_joint_state = self.get_best_ik(target_pose)
+            if target_joint_state is None:
+                self.get_logger().error("Failed to get target joint state")
+                return None
+            
         target_constraint = Constraints()
         for i in range(len(target_joint_state.position)):
             joint_constraint = JointConstraint()
@@ -474,6 +516,8 @@ class RobotInterfaceNode(Node):
             joint_constraint.tolerance_below = 0.001
             joint_constraint.weight = 1.0
             target_constraint.joint_constraints.append(joint_constraint)
+        
+
 
         request = GetMotionPlan.Request()
         request.motion_plan_request.group_name = self.move_group_name_

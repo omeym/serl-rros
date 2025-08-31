@@ -67,7 +67,10 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("env", "KukaPegInsert-Vision-v0", "Name of environment.")
 flags.DEFINE_string("agent", "drq", "Name of agent.")
 flags.DEFINE_string("exp_name", None, "Name of the experiment for wandb logging.")
-flags.DEFINE_integer("max_traj_length", 100, "Maximum length of trajectory.")
+
+## TODO :: NISARA :: change max trajectory length to at least 300 (or see what the new data wants)
+flags.DEFINE_integer("max_traj_length", 200, "Maximum length of trajectory.")
+
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_bool("save_model", False, "Whether to save model.")
 flags.DEFINE_integer("critic_actor_ratio", 4, "critic to actor update ratio.")
@@ -141,9 +144,12 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
             done = False
             start_time = time.time()
             while not done:
+                sampling_rng, key = jax.random.split(sampling_rng)
                 actions = agent.sample_actions(
                     observations=jax.device_put(obs),
-                    argmax=True,
+                    # argmax=True,
+                    seed=key,
+                    # deterministic=False,
                 )
                 actions = np.asarray(jax.device_get(actions))
 
@@ -245,7 +251,7 @@ def actor(agent: DrQAgent, data_store, env, sampling_rng):
 ##############################################################################
 
 
-def learner(rng, agent: DrQAgent, replay_buffer):
+def learner(rng, agent: DrQAgent, replay_buffer, demo_buffer):
     """
     The learner loop, which runs when "--learner" is set to True.
     """
@@ -293,18 +299,18 @@ def learner(rng, agent: DrQAgent, replay_buffer):
     # 50/50 sampling from RLPD, half from demo and half from online experience
     replay_iterator = replay_buffer.get_iterator(
         sample_args={
-            "batch_size": FLAGS.batch_size,
+            "batch_size": FLAGS.batch_size // 2,
             "pack_obs_and_next_obs": True,
         },
         device=sharding.replicate(),
     )
-    # demo_iterator = demo_buffer.get_iterator(
-    #     sample_args={
-    #         "batch_size": FLAGS.batch_size // 2,
-    #         "pack_obs_and_next_obs": True,
-    #     },
-    #     device=sharding.replicate(),
-    # )
+    demo_iterator = demo_buffer.get_iterator(
+        sample_args={
+            "batch_size": FLAGS.batch_size // 2,
+            "pack_obs_and_next_obs": True,
+        },
+        device=sharding.replicate(),
+    )
 
     # wait till the replay buffer is filled with enough data
     timer = Timer()
@@ -314,8 +320,8 @@ def learner(rng, agent: DrQAgent, replay_buffer):
         for critic_step in range(FLAGS.critic_actor_ratio - 1):
             with timer.context("sample_replay_buffer"):
                 batch = next(replay_iterator)
-                # demo_batch = next(demo_iterator)
-                # batch = concat_batches(batch, demo_batch, axis=0)
+                demo_batch = next(demo_iterator)
+                batch = concat_batches(batch, demo_batch, axis=0)
 
             with timer.context("train_critics"):
                 agent, critics_info = agent.update_critics(
@@ -324,8 +330,8 @@ def learner(rng, agent: DrQAgent, replay_buffer):
 
         with timer.context("train"):
             batch = next(replay_iterator)
-            # demo_batch = next(demo_iterator)
-            # batch = concat_batches(batch, demo_batch, axis=0)
+            demo_batch = next(demo_iterator)
+            batch = concat_batches(batch, demo_batch, axis=0)
             agent, update_info = agent.update_high_utd(batch, utd_ratio=1)
 
         # publish the updated network
@@ -340,7 +346,7 @@ def learner(rng, agent: DrQAgent, replay_buffer):
         if FLAGS.checkpoint_period and update_steps % FLAGS.checkpoint_period == 0:
             assert FLAGS.checkpoint_path is not None
             checkpoints.save_checkpoint(
-                FLAGS.checkpoint_path, agent.state, step=update_steps, keep=100
+                FLAGS.checkpoint_path, agent.state, step=update_steps, keep=200
             )
 
         update_steps += 1
@@ -364,6 +370,7 @@ def main(_):
     print("Initializing environment")
     # create env and load dataset
     print("Value of learner: ", FLAGS.learner)
+
     env = gym.make(
         FLAGS.env,
         fake_env=FLAGS.learner,
@@ -438,7 +445,7 @@ def main(_):
 
         # learner loop
         print_green("starting learner loop")
-        learner(sampling_rng, agent, replay_buffer)
+        learner(sampling_rng, agent=agent, replay_buffer=replay_buffer, demo_buffer=demo_buffer)
 
     elif FLAGS.actor:
         print("Initializing Actor Node")

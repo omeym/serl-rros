@@ -197,3 +197,4 @@ data_collector/data_collector/**/*.png
 examples/async_peg_insert_drq/checkpoints*/**
 examples/async_peg_insert_drq/log*/**
 examples/async_peg_insert_drq/demo_data*/**/**
+examples/async_peg_insert_drq/experiments*/**/**

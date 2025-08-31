@@ -4,11 +4,11 @@ import numpy as np
 register(
     id="KukaEnv-Vision-v0",
     entry_point="kuka_env.envs:KukaEnv",
-    max_episode_steps=100,
+    max_episode_steps=200,
 )
 
 register(
     id="KukaPegInsert-Vision-v0",
     entry_point="kuka_env.envs.peg_env:KukaPegInsert",
-    max_episode_steps=100,
+    max_episode_steps=200,
 )

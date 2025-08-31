@@ -23,6 +23,9 @@ import threading
 from datetime import datetime
 from collections import OrderedDict
 from typing import Dict
+import logging
+import os
+import shutil
 
 sys.path.append("/home/rp/SERL/src/")
 from serl_robot_infra.franka_env.camera.video_capture import VideoCapture
@@ -102,12 +105,15 @@ class KukaEnv(gym.Env):
         self.url = config.ROBOT_IP
         self.config = config
         self.max_episode_length = max_episode_length
-        # self.max_episode_length = 5
+        self.max_episode_length = 200
+        self.task_reward = 1.0
 
         # convert last 3 elements from euler to quat, from size (6,) to (7,)
         self.resetpos = np.concatenate(
             [config.RESET_POSE[:3], euler_2_quat(config.RESET_POSE[3:])]
         )
+
+        self.reset_joint_pos = config.RESET_JOINT_POSITION.copy()
 
         self.currpos = self.resetpos.copy()
         self.currvel = np.zeros((6,))
@@ -131,6 +137,33 @@ class KukaEnv(gym.Env):
         self.save_video = save_video
         self.recording_frames = []
 
+        # nisara : Saving some important information here
+        if not fake_env:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.exp_folder = os.path.join('experiments', f"exp_{timestamp}")
+            os.makedirs(self.exp_folder, exist_ok=True)
+
+            # Save the parameters (config.py) used for the experiment
+            config_path = '/home/rp/SERL/src/serl_robot_infra/kuka_env/envs/peg_env/config.py'
+            parameters_path = os.path.join(self.exp_folder, "parameters.txt")
+            shutil.copy2(config_path, parameters_path)
+
+            # Initialize a reward over the whole episode
+            self.episode_max_reward = 0
+            self.save_reward_stats = True
+            self.reward_stats_file = os.path.join(self.exp_folder, "reward_stats.txt")
+            
+            # Setting logging
+            self.logger = logging.getLogger()
+            self.logger.handlers.pop(0)
+            self.logger.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+            file_handler = logging.FileHandler(os.path.join(self.exp_folder, 'reward_log.log'))
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+            self.logger.propagate = False
+
         # boundary box
         self.xyz_bounding_box = gym.spaces.Box(
             config.ABS_POSE_LIMIT_LOW[:3],
@@ -143,9 +176,10 @@ class KukaEnv(gym.Env):
             dtype=np.float64,
         )
         # Action/Observation Space
+        # TODO :: change to 6
         self.action_space = gym.spaces.Box(
-            np.ones((7,), dtype=np.float32) * -1,
-            np.ones((7,), dtype=np.float32),
+            np.ones((6,), dtype=np.float32) * -1,
+            np.ones((6,), dtype=np.float32),
         )
 
         self.observation_space = gym.spaces.Dict(
@@ -186,6 +220,34 @@ class KukaEnv(gym.Env):
         self.use_gripper = config.USE_GRIPPER
         print("Initialized Kuka")
 
+        # Initialization for the sdf based reward
+        self.mesh_file_path = config.MESH_FILE_PATH
+        self.num_sampled_points = 1000
+        self.voxel_size = 0.001
+        import trimesh
+        import pysdf
+        self.og_peg_mesh = trimesh.load(self.mesh_file_path)
+        # The given mesh file is not in meters, convert it 
+        self.og_peg_mesh.apply_scale(0.001)
+
+        self.target_transform = np.eye(4)
+        self.target_transform[:3, 3] = self._TARGET_POSE[:3]
+        self.target_transform[:3, :3] = Rotation.from_euler("ZYX", self._TARGET_POSE[3:]).as_matrix()
+        self.transformed_peg_mesh = self.og_peg_mesh.copy()
+        self.transformed_peg_mesh.apply_transform(self.target_transform)
+        
+        vertices = np.array(self.transformed_peg_mesh.vertices, dtype=np.float32)
+        faces = np.array(self.transformed_peg_mesh.faces, dtype=np.uint32)
+ 
+        self.sdf = pysdf.SDF(vertices, faces, robust = True)
+        self.local_surface_points, _ = trimesh.sample.sample_surface_even(self.transformed_peg_mesh, self.num_sampled_points)
+        self.local_surface_points = np.array(self.local_surface_points)
+        self.transform_target_inverse = np.linalg.inv(self.target_transform)
+
+
+        
+
+
     def clip_safety_box(self, pose: np.ndarray) -> np.ndarray:
         """Clip the pose to be within the safety box."""
         pose[:3] = np.clip(
@@ -193,19 +255,44 @@ class KukaEnv(gym.Env):
         )
         euler = Rotation.from_quat(pose[3:]).as_euler("ZYX")
 
-        # Clip first euler angle separately due to discontinuity from pi to -pi
-        sign = np.sign(euler[2])
-        euler[2] = sign * (
+        # Clip first two euler angles separately due to discontinuity from pi to -pi
+        # sign = np.sign(euler[2])
+        # euler[2] = sign * (
+        #     np.clip(
+        #         np.abs(euler[2]),
+        #         self.rpy_bounding_box.low[2],
+        #         self.rpy_bounding_box.high[2],
+        #     )
+        # )
+
+        # nisara : Clipping the B and C euler angles separately because they are at inflection point
+        
+        # A
+        euler[0] = (
+            np.clip(
+                euler[0],
+                self.rpy_bounding_box.low[0],
+                self.rpy_bounding_box.high[0],
+            )
+        )
+        # B - The max range is -10 to +10 degrees
+        euler[1] = (
+            np.clip(
+                euler[1],
+                self.rpy_bounding_box.low[1],
+                self.rpy_bounding_box.high[1],
+            )
+        )
+        # C - The max range is -170 to +170 degrees
+        sign_C = np.sign(euler[2])
+        euler[2] = sign_C * (
             np.clip(
                 np.abs(euler[2]),
-                self.rpy_bounding_box.low[2],
                 self.rpy_bounding_box.high[2],
+                np.abs(np.deg2rad(180)),
             )
         )
 
-        euler[:2] = np.clip(
-            euler[:2], self.rpy_bounding_box.low[:2], self.rpy_bounding_box.high[:2]
-        )
         pose[3:] = Rotation.from_euler("ZYX", euler).as_quat()
 
         return pose
@@ -215,12 +302,10 @@ class KukaEnv(gym.Env):
         # print("In step function")
 
         start_time = time.time()
-        # nisara : Comment
-        # print("Action before clipping: ", action)
+        self.logger.info(f"Action before clipping: {action}")
         action = np.clip(action, self.action_space.low, self.action_space.high)
         xyz_delta = action[:3]
-        # nisara : Comment
-        # print("Action after clipping ==xyz_delta==: ", xyz_delta)
+        self.logger.info(f"Action after clipping ==xyz_delta==: {xyz_delta}")
 
         self.nextpos = self.currpos.copy()
         # # nisara : Comment
@@ -239,20 +324,19 @@ class KukaEnv(gym.Env):
             )
         ).as_quat()
 
-        # # nisara : Comment
-        # nextPos_euler = Rotation.from_quat(self.nextpos[3:]).as_euler(
-        #     "ZYX", degrees=True
-        # )
-        # print("Next position's euler: ", nextPos_euler)
-        # print("Next position in step: ", self.nextpos)
-
         ##Remove gripper action NOTE: Omey
         if self.use_gripper:
             gripper_action = action[6] * self.action_scale[2]
             gripper_action_effective = self._send_gripper_command(gripper_action)
 
         self._send_pos_command(self.clip_safety_box(self.nextpos))
-        # self._send_pos_command(self.nextpos)
+        
+        # ## GO TO TARGET POSE FOR DEBUGGING
+        # tp = self._TARGET_POSE.copy()
+        # self.nextpos[:3] = tp[:3]
+        # self.nextpos[3:] = euler_2_quat(tp[3:])
+        # self._send_pos_command(self.clip_safety_box(self.nextpos))
+        # ## END DEBUGGING
 
         self.curr_path_length += 1
         dt = time.time() - start_time
@@ -265,7 +349,7 @@ class KukaEnv(gym.Env):
         else:
             reward = self.compute_reward(ob)
 
-        done = self.curr_path_length >= self.max_episode_length or reward == 1
+        done = self.curr_path_length >= self.max_episode_length or reward == self.task_reward
         return ob, reward, done, False, {}
 
     def compute_reward(self, obs, gripper_action_effective=None) -> bool:
@@ -273,23 +357,96 @@ class KukaEnv(gym.Env):
         current_pose = obs["state"]["tcp_pose"]
 
         # convert from quat to euler first
+        euler_angles_degrees = Rotation.from_quat(current_pose[3:]).as_euler("ZYX", degrees=True)
         euler_angles = quat_2_euler(current_pose[3:])
-        euler_angles = np.abs(euler_angles)
-        # nisara: IMPORTANT: Convert the euler angles of target pose to absolute values too 
+        
+        # nisara: IMPORTANT: Convert the target pose to absolute values too 
         target_pose = self._TARGET_POSE.copy()
-        target_pose[3:] = np.abs(target_pose[3:])
+
         current_pose = np.hstack([current_pose[:3], euler_angles])
-        delta = np.abs(current_pose - target_pose)
-        if np.all(delta < self._REWARD_THRESHOLD):
-            print("Received reward 1!!!!")
-            reward = 1
+        curr_pose_print = np.hstack([current_pose[:3], euler_angles_degrees])
+        
+        give_reward = np.zeros(6, dtype=bool)
+        difference = np.zeros(6)
+
+        difference[:3] = np.abs(current_pose[:3] - target_pose[:3])
+        give_reward[:3] = difference[:3] <= self._REWARD_THRESHOLD[:3]
+
+        # Calculation of B and C's delta is going to be different 
+        # For B, the range is -5 to +5 degrees
+        # For C, the range is -175 to -180 and +175 to +180 degrees
+
+        ## A
+
+        difference[3] = np.abs(current_pose[3] - target_pose[3])
+        give_reward[3] = difference[3] <= self._REWARD_THRESHOLD[3]
+
+        ## B
+        difference[4] = np.abs(current_pose[4] - target_pose[4])
+        if difference[4] <= self._REWARD_THRESHOLD[4]:
+                give_reward[4] = 1
+
+        ## C
+        difference[5] = np.pi - np.abs(current_pose[5])
+        if difference[5] <= self._REWARD_THRESHOLD[5]:
+                give_reward[5] = 1
+
+        if np.all(give_reward):
+            print("RECEIVED COMPLETE REWARD 1.0!!!!")
+            self.logger.info("RECEIVED COMPLETE REWARD 1.0!!!!")
+            self.logger.info(f"Received reward 1.0 at \n\tcurrent pose: {curr_pose_print} and \n\tdiff: {difference}")
+            reward = self.task_reward
+
         else:
-            # print(f'Goal not reached, the difference is {delta}, the desired threshold is {_REWARD_THRESHOLD}')
-            reward = 0
+            ## DO i add reward for 0.099 = z-value, reward = 0.98
+            if current_pose[2] <= 0.099:
+                reward = 0.98
+                self.logger.info("Received surface reward 0.98")
+            else:
+                # SDF BASED REWARD
+                tcp_transform = np.eye(4)
+                tcp_transform[:3, 3] = current_pose[:3]
+                tcp_transform[:3, :3] = Rotation.from_euler("ZYX", current_pose[3:]).as_matrix()
+                transform_target_current = np.linalg.inv(tcp_transform) @ self.target_transform
+                tcp_rot_matrix = transform_target_current[:3, :3]
+                tcp_t = transform_target_current[:3, 3]
+                global_surface_points = (tcp_rot_matrix @ self.local_surface_points.T).T + tcp_t
 
-        if self.config.APPLY_GRIPPER_PENALTY and gripper_action_effective:
-            reward -= self.config.GRIPPER_PENALTY
+                # Calculate the signed distance field
+                sdf_values = np.array([self.sdf(point) for point in global_surface_points])
 
+                # Calculate the reward based on the sdf values
+                reward = np.sqrt(np.mean(np.square(sdf_values)))
+                reward = 1.0 - (reward / 0.1)  # Normalize the reward
+                reward = np.clip(reward, -1.0, 1.0)  # Ensure the reward is between -1 and 1
+            self.logger.info(f"Goal not reached, the difference is \n\tcurrent pose: {curr_pose_print} and \n\tdiff (in rad): {difference}  ")
+
+        """ Commenting out the existing reward function to make place for sdf
+        else:
+            # if current_pose[2] < 0.10000:
+            #         # Let's give more reward if z is even lower
+            #         self.logger.info("Received surface reward 0.6")
+            #         reward = 0.7
+            # else:
+            #     if current_pose[2] < 0.10300:
+            #         self.logger.info("Received surface reward 0.4")
+            #         reward = 0.4
+            #     else:
+            #         reward = 0.0
+
+            ## Give reward based on euclidean distance
+            euclidean_distance = np.linalg.norm(np.abs(current_pose) - np.abs(target_pose))
+            ## The range of th edistance is 0.06 and 0.018 in demo buffer so we follow the same thing here
+            reward = np.abs(1.0 - (euclidean_distance / 0.06))
+            self.logger.info(f"Goal not reached, the difference is \n\tcurrent pose: {curr_pose_print} and \n\tdiff (in rad): {difference}  ")
+        """
+        self.logger.info(f"Reward: {reward}")
+        self.logger.info("\n")
+        
+        # if self.config.APPLY_GRIPPER_PENALTY and gripper_action_effective:
+        #     reward -= self.config.GRIPPER_PENALTY
+
+        self.episode_max_reward = max(self.episode_max_reward, reward)
         return reward
 
     def crop_image(self, name, image) -> np.ndarray:
@@ -349,9 +506,6 @@ class KukaEnv(gym.Env):
         # Change to precision mode for reset
         # requests.post(self.url + "update_param", json=self.config.PRECISION_PARAM)
 
-        # nisara : Comment
-        # print("In the function go_to_rest to reset the pose")
-
         # Perform Carteasian reset
         if self.randomreset:  # randomize reset position in xy plane
             reset_pose = self.resetpos.copy()
@@ -366,15 +520,38 @@ class KukaEnv(gym.Env):
             self._send_pos_command(reset_pose)
         else:
             reset_pose = self.resetpos.copy()
-            # nisara : Comment
-            # print("In reset pose, sending the reset pose: ", reset_pose)
-            self._send_pos_command(reset_pose)
+
+            # self._send_pos_command(reset_pose)
+
+            # Reset to a specified joint position and not cartesian position to avoid singularity
+            reset_joint_pose = self.reset_joint_pos.copy()
+            self._send_reset_joint_command(reset_joint_pose)
 
         # Change to compliance mode
         # requests.post(self.url + "update_param", json=self.config.COMPLIANCE_PARAM)
 
+    def _send_reset_joint_command(self, joint_pos: np.ndarray):
+        """
+        Internal function to send joint position command to the robot.
+        Make sure that the joint angles are in radians and not degrees.
+        """
+        pos = np.array(joint_pos).astype(np.float32)
+        self.robot_interface_node.move_to_joint_pos(pos)
+        
+        
+
     def reset(self, joint_reset=False, **kwargs):
         # requests.post(self.url + "update_param", json=self.config.COMPLIANCE_PARAM)
+
+        # nisara: Have a maximum episode reward also and log that somewhere to maintain the increasing trend if any
+        
+        if self.save_reward_stats:
+            with open(self.reward_stats_file, "a") as f:
+                f.write(f"{self.episode_max_reward}\n")
+            self.logger.info(f"Max reward for the episode: {self.episode_max_reward}")
+        self.episode_max_reward = 0
+
+        self.logger.info(f"\nResetting the environment\n")
 
         if self.save_video:
             self.save_video_recording()
@@ -437,23 +614,22 @@ class KukaEnv(gym.Env):
     def _send_pos_command(self, pos: np.ndarray):
         """Internal function to send position command to the robot."""
 
+        np.set_printoptions(precision=5, suppress=True)
+
         # # nisara : Comment
-        # np.set_printoptions(precision=3, suppress=True)
         # curr_pos_euler = Rotation.from_quat(self.currpos[3:]).as_euler("ZYX", degrees=True)
         # print_curr_pos = np.concatenate([self.currpos[:3] * 1000, curr_pos_euler])
         # print("Current pose in _send_pos_command: ", print_curr_pos)
 
-        arr = np.array(pos).astype(np.float32)
+        # nisara : Comment
+        arr_euler = Rotation.from_quat(pos[3:]).as_euler("ZYX", degrees=True)                                       
+        print_arr_pos = np.concatenate([pos[:3], arr_euler])
+        self.logger.info(f"Sending position command to \n\tmove to pos: {print_arr_pos}")
 
-        # # nisara : Comment
-        # arr_euler = Rotation.from_quat(arr[3:]).as_euler("ZYX", degrees=True)                                       
-        # print_arr_pos = np.concatenate([arr[:3] * 1000, arr_euler])
-        # print("In the function to send position command to move to pos: ", print_arr_pos)
-        # # print("In the same function, reset pose: ", self.resetpos)
+        arr = np.array(pos).astype(np.float32)
 
         self.robot_interface_node.move_to_pose(arr, self.resetpos)
         print("Done moving the robot")
-        # print("\n")
 
     def _send_gripper_command(self, pos: float, mode="binary"):
         """Internal function to send gripper command to the robot."""

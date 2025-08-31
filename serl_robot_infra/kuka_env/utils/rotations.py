@@ -1,9 +1,9 @@
 from scipy.spatial.transform import Rotation as R
 
 
-def quat_2_euler(quat):
+def quat_2_euler(quat, degrees=False):
     """calculates and returns: yaw, pitch, roll from given quaternion"""
-    return R.from_quat(quat).as_euler("ZYX")
+    return R.from_quat(quat).as_euler("ZYX", degrees=degrees)
 
 
 def euler_2_quat(xyz_as_abc):
